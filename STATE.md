@@ -23,8 +23,9 @@ Progress tracking for the implementation described in [PLAN.md](PLAN.md).
 - [x] versions.go: GetLatestVersionMatch + resolveVersion (with tests)
 
 ### 4. Download + cache
-- [ ] download.go (go-getter/v2 wrapper, atomic rename)
-- [ ] cache.go (path layout, CacheStatus, functional options)
+- [x] download.go (go-getter/v2 wrapper, atomic rename)
+- [x] cache.go (path layout, CacheStatus, functional options)
+- [x] tests for cache helpers + go-getter (local & HTTP tar.gz)
 
 ### 5. Inspect + schema
 - [ ] inspect.go (terraform-config-inspect → our Module)
