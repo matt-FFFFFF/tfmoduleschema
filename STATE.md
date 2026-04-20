@@ -20,7 +20,7 @@ Progress tracking for the implementation described in [PLAN.md](PLAN.md).
 - [x] registry httptest-based unit tests (passing)
 
 ### 3. Versions
-- [ ] versions.go: ListVersions wrapper + constraint resolution (fixVersion)
+- [x] versions.go: GetLatestVersionMatch + resolveVersion (with tests)
 
 ### 4. Download + cache
 - [ ] download.go (go-getter/v2 wrapper, atomic rename)
