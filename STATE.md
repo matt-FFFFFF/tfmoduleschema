@@ -10,14 +10,14 @@ Progress tracking for the implementation described in [PLAN.md](PLAN.md).
 ## Progress
 
 ### 1. Scaffold
-- [~] go.mod, Makefile, .gitignore, workflows, LICENSE, README, STATE.md
+- [x] go.mod, Makefile, .gitignore, workflows, LICENSE, README, STATE.md
 
 ### 2. Types + registry clients
-- [ ] types.go (Module, Variable, Output, ProviderRequirement, ...)
-- [ ] registry/registry.go (interface + VersionsRequest)
-- [ ] registry/terraform.go (HashiCorp client)
-- [ ] registry/opentofu.go (OpenTofu client)
-- [ ] registry httptest-based unit tests
+- [x] types.go (Module, Variable, Output, ProviderRequirement, ...)
+- [x] registry/registry.go (interface + VersionsRequest)
+- [x] registry/terraform.go (HashiCorp client)
+- [x] registry/opentofu.go (OpenTofu client)
+- [x] registry httptest-based unit tests (passing)
 
 ### 3. Versions
 - [ ] versions.go: ListVersions wrapper + constraint resolution (fixVersion)
