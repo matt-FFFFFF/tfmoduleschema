@@ -144,7 +144,7 @@ tfmoduleschema --ns <namespace> -n <name> -s <system> \
 
 Global flags:
 
-| Flag | Short | Description |
+| Flag | Alias | Description |
 |---|---|---|
 | `--namespace` | `--ns` | Module namespace (required). |
 | `--name` | `-n` | Module name (required). |
