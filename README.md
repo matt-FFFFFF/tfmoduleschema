@@ -150,6 +150,7 @@ Global flags:
 | `--name` | `-n` | Module name (required). |
 | `--system` | `-s` | Target system / "provider" (required). |
 | `--version-constraint` | `--vc` | Concrete version or constraint. Empty = latest. |
+| `--submodule` | `--sm` | Target a submodule by path (e.g. `modules/network`) instead of the root module. |
 | `--registry` | `-r` | `opentofu` (default) or `terraform`. |
 | `--cache-dir` | | Cache directory. Overrides `$TFMODULESCHEMA_CACHE_DIR`. |
 | `--force-fetch` | | Always re-download. |
@@ -159,7 +160,7 @@ Commands:
 
 | Command | Description |
 |---|---|
-| `module schema` | Full parsed root module as JSON. |
+| `module schema` | Full parsed module as JSON (root, or submodule via `--submodule`). |
 | `variable list` | Newline-separated variable names. |
 | `variable schema [name]` | Full schema for one variable, or all. |
 | `output list` | Newline-separated output names. |
@@ -167,7 +168,6 @@ Commands:
 | `provider list` | Newline-separated required-provider names. |
 | `provider schema [name]` | Full requirement for one provider, or the map. |
 | `submodule list` | Paths of first-level submodules. |
-| `submodule schema <path>` | Full schema for one submodule. |
 | `version list` | All versions the registry advertises. |
 
 ### Examples
@@ -192,7 +192,14 @@ tfmoduleschema -r terraform --ns Azure -n avm-res-compute-virtualmachine \
 
 # Inspect a submodule.
 tfmoduleschema --ns terraform-aws-modules -n vpc -s aws --vc 5.13.0 \
-  submodule schema modules/vpc-endpoints
+  --submodule modules/vpc-endpoints module schema
+
+# Any noun command can be retargeted at a submodule with --submodule / --sm.
+tfmoduleschema --ns terraform-aws-modules -n vpc -s aws --vc 5.13.0 \
+  --sm modules/vpc-endpoints variable list
+
+tfmoduleschema --ns terraform-aws-modules -n vpc -s aws --vc 5.13.0 \
+  --sm modules/vpc-endpoints output schema vpc_endpoints
 ```
 
 ## Caching
