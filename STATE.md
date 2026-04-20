@@ -28,12 +28,13 @@ Progress tracking for the implementation described in [PLAN.md](PLAN.md).
 - [x] tests for cache helpers + go-getter (local & HTTP tar.gz)
 
 ### 5. Inspect + schema
-- [ ] inspect.go (terraform-config-inspect → our Module)
-- [ ] schema.go (Get* public methods)
-- [ ] testdata/ fixture modules (root + submodules)
+- [x] inspect.go (terraform-config-inspect → our Module)
+- [x] schema.go (Get* public methods)
+- [x] testdata/ fixture modules (root + submodules)
 
 ### 6. Server
-- [ ] server.go (NewServer, options, orchestration)
+- [x] server.go (NewServer, options, orchestration, normalise, fetchModule)
+- [x] end-to-end tests using fake registry + local-file getter
 
 ### 7. CLI
 - [ ] cmd/tfmoduleschema/main.go
