@@ -35,13 +35,13 @@ func buildRootCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "namespace",
-				Aliases:  []string{"n"},
+				Aliases:  []string{"ns"},
 				Usage:    "Module namespace (e.g. Azure, terraform-aws-modules)",
 				Required: true,
 			},
 			&cli.StringFlag{
 				Name:     "name",
-				Aliases:  []string{"m"},
+				Aliases:  []string{"n"},
 				Usage:    "Module name (e.g. avm-res-compute-virtualmachine, vpc)",
 				Required: true,
 			},
@@ -52,9 +52,9 @@ func buildRootCommand() *cli.Command {
 				Required: true,
 			},
 			&cli.StringFlag{
-				Name:    "module-version",
-				Aliases: []string{"mv"},
-				Usage:   "Module version or constraint (e.g. 1.2.3, ~> 1.2). Empty for latest",
+				Name:    "version-constraint",
+				Aliases: []string{"vc"},
+				Usage:   "Version or constraint (e.g. 1.2.3, ~> 1.2). Empty for latest",
 			},
 			&cli.StringFlag{
 				Name:    "registry",
@@ -72,10 +72,10 @@ func buildRootCommand() *cli.Command {
 		},
 		Commands: []*cli.Command{
 			moduleCommand(),
-			variablesCommand(),
-			outputsCommand(),
-			providersCommand(),
-			submodulesCommand(),
+			variableCommand(),
+			outputCommand(),
+			providerCommand(),
+			submoduleCommand(),
 			versionCommand(),
 		},
 	}
@@ -87,7 +87,7 @@ func requestFromCmd(cmd *cli.Command) tfmoduleschema.Request {
 		Namespace:    cmd.String("namespace"),
 		Name:         cmd.String("name"),
 		System:       cmd.String("system"),
-		Version:      cmd.String("module-version"),
+		Version:      cmd.String("version-constraint"),
 		RegistryType: registryTypeFromString(cmd.String("registry")),
 	}
 }
@@ -164,11 +164,11 @@ func moduleCommand() *cli.Command {
 	}
 }
 
-// --- variables ---
+// --- variable ---
 
-func variablesCommand() *cli.Command {
+func variableCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "variables",
+		Name:  "variable",
 		Usage: "Query module input variables",
 		Commands: []*cli.Command{
 			{
@@ -216,11 +216,11 @@ func variablesCommand() *cli.Command {
 	}
 }
 
-// --- outputs ---
+// --- output ---
 
-func outputsCommand() *cli.Command {
+func outputCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "outputs",
+		Name:  "output",
 		Usage: "Query module outputs",
 		Commands: []*cli.Command{
 			{
@@ -268,11 +268,11 @@ func outputsCommand() *cli.Command {
 	}
 }
 
-// --- providers ---
+// --- provider ---
 
-func providersCommand() *cli.Command {
+func providerCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "providers",
+		Name:  "provider",
 		Usage: "Query required_providers",
 		Commands: []*cli.Command{
 			{
@@ -296,7 +296,7 @@ func providersCommand() *cli.Command {
 			},
 			{
 				Name:      "schema",
-				Usage:     "Print requirement for one provider, or the full map",
+				Usage:     "Print requirement for one provider, or the full map when no name given",
 				ArgsUsage: "[provider-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					s := newServer(cmd)
@@ -320,11 +320,11 @@ func providersCommand() *cli.Command {
 	}
 }
 
-// --- submodules ---
+// --- submodule ---
 
-func submodulesCommand() *cli.Command {
+func submoduleCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "submodules",
+		Name:  "submodule",
 		Usage: "Query submodules under modules/",
 		Commands: []*cli.Command{
 			{

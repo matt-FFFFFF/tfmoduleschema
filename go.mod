@@ -1,6 +1,6 @@
 module github.com/matt-FFFFFF/tfmoduleschema
 
-go 1.25.0
+go 1.26.1
 
 require (
 	github.com/hashicorp/go-getter/v2 v2.2.3
