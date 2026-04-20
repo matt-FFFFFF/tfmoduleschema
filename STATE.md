@@ -37,7 +37,7 @@ Progress tracking for the implementation described in [PLAN.md](PLAN.md).
 - [x] end-to-end tests using fake registry + local-file getter
 
 ### 7. CLI
-- [ ] cmd/tfmoduleschema/main.go
+- [x] cmd/tfmoduleschema/main.go (urfave/cli/v3: module/variables/outputs/providers/submodules/version)
 
 ### 8. Integration + release
 - [ ] Integration tests (network, both registries)

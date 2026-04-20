@@ -27,6 +27,7 @@ require (
 	github.com/mitchellh/go-wordwrap v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/ulikunitz/xz v0.5.8 // indirect
+	github.com/urfave/cli/v3 v3.8.0 // indirect
 	github.com/zclconf/go-cty v1.14.4 // indirect
 	golang.org/x/mod v0.8.0 // indirect
 	golang.org/x/sys v0.5.0 // indirect
