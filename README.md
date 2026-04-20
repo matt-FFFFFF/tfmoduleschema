@@ -137,8 +137,8 @@ selection uses `hashicorp/go-version` semantics.
 ## CLI
 
 ```
-tfmoduleschema -n <namespace> -m <name> -s <system> \
-  [--module-version VERSION] [--registry opentofu|terraform] \
+tfmoduleschema --ns <namespace> -n <name> -s <system> \
+  [--version-constraint VERSION] [--registry opentofu|terraform] \
   <command>
 ```
 
@@ -146,10 +146,10 @@ Global flags:
 
 | Flag | Short | Description |
 |---|---|---|
-| `--namespace` | `-n` | Module namespace (required). |
-| `--name` | `-m` | Module name (required). |
+| `--namespace` | `--ns` | Module namespace (required). |
+| `--name` | `-n` | Module name (required). |
 | `--system` | `-s` | Target system / "provider" (required). |
-| `--module-version` | `-mv` | Concrete version or constraint. Empty = latest. |
+| `--version-constraint` | `--vc` | Concrete version or constraint. Empty = latest. |
 | `--registry` | `-r` | `opentofu` (default) or `terraform`. |
 | `--cache-dir` | | Cache directory. Overrides `$TFMODULESCHEMA_CACHE_DIR`. |
 | `--force-fetch` | | Always re-download. |
@@ -160,39 +160,39 @@ Commands:
 | Command | Description |
 |---|---|
 | `module schema` | Full parsed root module as JSON. |
-| `variables list` | Newline-separated variable names. |
-| `variables schema [name]` | Full schema for one variable, or all. |
-| `outputs list` | Newline-separated output names. |
-| `outputs schema [name]` | Full schema for one output, or all. |
-| `providers list` | Newline-separated required-provider names. |
-| `providers schema [name]` | Full requirement for one provider, or the map. |
-| `submodules list` | Paths of first-level submodules. |
-| `submodules schema <path>` | Full schema for one submodule. |
+| `variable list` | Newline-separated variable names. |
+| `variable schema [name]` | Full schema for one variable, or all. |
+| `output list` | Newline-separated output names. |
+| `output schema [name]` | Full schema for one output, or all. |
+| `provider list` | Newline-separated required-provider names. |
+| `provider schema [name]` | Full requirement for one provider, or the map. |
+| `submodule list` | Paths of first-level submodules. |
+| `submodule schema <path>` | Full schema for one submodule. |
 | `version list` | All versions the registry advertises. |
 
 ### Examples
 
 ```bash
 # List versions (OpenTofu registry by default).
-tfmoduleschema -n terraform-aws-modules -m vpc -s aws version list
+tfmoduleschema --ns terraform-aws-modules -n vpc -s aws version list
 
 # Full root-module schema, pinned version.
-tfmoduleschema -n terraform-aws-modules -m vpc -s aws -mv 5.13.0 module schema
+tfmoduleschema --ns terraform-aws-modules -n vpc -s aws --vc 5.13.0 module schema
 
 # Just the variable names for the latest stable version.
-tfmoduleschema -n terraform-aws-modules -m vpc -s aws variables list
+tfmoduleschema --ns terraform-aws-modules -n vpc -s aws variable list
 
 # Schema for one variable.
-tfmoduleschema -n terraform-aws-modules -m vpc -s aws -mv 5.13.0 \
-  variables schema cidr
+tfmoduleschema --ns terraform-aws-modules -n vpc -s aws --vc 5.13.0 \
+  variable schema cidr
 
 # Use the HashiCorp registry.
-tfmoduleschema -r terraform -n Azure -m avm-res-compute-virtualmachine \
-  -s azurerm variables list
+tfmoduleschema -r terraform --ns Azure -n avm-res-compute-virtualmachine \
+  -s azurerm variable list
 
 # Inspect a submodule.
-tfmoduleschema -n terraform-aws-modules -m vpc -s aws -mv 5.13.0 \
-  submodules schema modules/vpc-endpoints
+tfmoduleschema --ns terraform-aws-modules -n vpc -s aws --vc 5.13.0 \
+  submodule schema modules/vpc-endpoints
 ```
 
 ## Caching
