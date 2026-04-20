@@ -32,6 +32,26 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+brews:
+  - name: tfmoduleschema
+    ids:
+      - tfmoduleschema
+    repository:
+      owner: matt-FFFFFF
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/matt-FFFFFF/tfmoduleschema"
+    description: "Return the variables, outputs, required providers, available versions, and submodules for any Terraform module in the OpenTofu or HashiCorp Terraform module registries."
+    license: "MPL-2.0"
+    commit_author:
+      name: matt-ffffff-tapper[bot]
+      email: 41898282+matt-ffffff-tapper[bot]@users.noreply.github.com
+    commit_msg_template: "brew: update {{ .ProjectName }} to {{ .Tag }}"
+    test: |
+      system "#{bin}/tfmoduleschema", "--version"
+
 changelog:
   sort: asc
   filters:
