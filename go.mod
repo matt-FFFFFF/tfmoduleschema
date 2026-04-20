@@ -5,7 +5,9 @@ go 1.25.0
 require (
 	github.com/hashicorp/go-getter/v2 v2.2.3
 	github.com/hashicorp/go-version v1.9.0
+	github.com/hashicorp/terraform-config-inspect v0.0.0-20260224005459-813a97530220
 	github.com/stretchr/testify v1.11.1
+	github.com/urfave/cli/v3 v3.8.0
 )
 
 require (
@@ -20,14 +22,12 @@ require (
 	github.com/hashicorp/go-safetemp v1.0.0 // indirect
 	github.com/hashicorp/hcl v0.0.0-20170504190234-a4b07c25de5f // indirect
 	github.com/hashicorp/hcl/v2 v2.20.1 // indirect
-	github.com/hashicorp/terraform-config-inspect v0.0.0-20260224005459-813a97530220 // indirect
 	github.com/klauspost/compress v1.11.2 // indirect
 	github.com/mitchellh/go-homedir v1.0.0 // indirect
 	github.com/mitchellh/go-testing-interface v1.0.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/ulikunitz/xz v0.5.8 // indirect
-	github.com/urfave/cli/v3 v3.8.0 // indirect
+	github.com/ulikunitz/xz v0.5.14 // indirect
 	github.com/zclconf/go-cty v1.14.4 // indirect
 	golang.org/x/mod v0.8.0 // indirect
 	golang.org/x/sys v0.5.0 // indirect
