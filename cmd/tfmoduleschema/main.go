@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"sort"
 	"strings"
 
@@ -55,6 +56,11 @@ func buildRootCommand() *cli.Command {
 				Name:    "version-constraint",
 				Aliases: []string{"vc"},
 				Usage:   "Version or constraint (e.g. 1.2.3, ~> 1.2). Empty for latest",
+			},
+			&cli.StringFlag{
+				Name:    "submodule",
+				Aliases: []string{"sm"},
+				Usage:   "Target a submodule by path (e.g. modules/network) instead of the root module",
 			},
 			&cli.StringFlag{
 				Name:    "registry",
@@ -110,6 +116,43 @@ func registryTypeFromString(s string) tfmoduleschema.RegistryType {
 	}
 }
 
+// submoduleFromCmd returns the cleaned submodule path from --submodule,
+// or "" when the flag is unset. It rejects absolute paths and any path
+// that escapes the module root via "..".
+func submoduleFromCmd(cmd *cli.Command) (string, error) {
+	raw := strings.TrimSpace(cmd.String("submodule"))
+	if raw == "" {
+		return "", nil
+	}
+	if strings.ContainsRune(raw, '\\') {
+		return "", fmt.Errorf("invalid --submodule path %q: use forward slashes", raw)
+	}
+	if path.IsAbs(raw) {
+		return "", fmt.Errorf("invalid --submodule path %q: must be relative to the module root", raw)
+	}
+	cleaned := path.Clean(raw)
+	if cleaned == "." || cleaned == "" {
+		return "", fmt.Errorf("invalid --submodule path %q: must not be empty or '.'", raw)
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("invalid --submodule path %q: must not escape the module root", raw)
+	}
+	return cleaned, nil
+}
+
+// loadModule fetches either the root module or the submodule designated
+// by --submodule, depending on whether the flag is set.
+func loadModule(ctx context.Context, s *tfmoduleschema.Server, cmd *cli.Command) (*tfmoduleschema.Module, error) {
+	sub, err := submoduleFromCmd(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if sub == "" {
+		return s.GetModule(ctx, requestFromCmd(cmd))
+	}
+	return s.GetSubmodule(ctx, requestFromCmd(cmd), sub)
+}
+
 func newServer(cmd *cli.Command) *tfmoduleschema.Server {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
@@ -147,14 +190,14 @@ func printList(items []string) {
 func moduleCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "module",
-		Usage: "Inspect the root module",
+		Usage: "Inspect the root module (or a submodule via --submodule)",
 		Commands: []*cli.Command{{
 			Name:  "schema",
-			Usage: "Print the full parsed root module as JSON",
+			Usage: "Print the full parsed module as JSON",
 			Action: func(ctx context.Context, cmd *cli.Command) error {
 				s := newServer(cmd)
 				defer s.Cleanup()
-				m, err := s.GetModule(ctx, requestFromCmd(cmd))
+				m, err := loadModule(ctx, s, cmd)
 				if err != nil {
 					return err
 				}
@@ -177,12 +220,12 @@ func variableCommand() *cli.Command {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					s := newServer(cmd)
 					defer s.Cleanup()
-					vars, err := s.GetVariables(ctx, requestFromCmd(cmd))
+					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
 						return err
 					}
-					names := make([]string, 0, len(vars))
-					for _, v := range vars {
+					names := make([]string, 0, len(m.Variables))
+					for _, v := range m.Variables {
 						names = append(names, v.Name)
 					}
 					printList(names)
@@ -196,15 +239,15 @@ func variableCommand() *cli.Command {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					s := newServer(cmd)
 					defer s.Cleanup()
-					vars, err := s.GetVariables(ctx, requestFromCmd(cmd))
+					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
 						return err
 					}
 					name := cmd.Args().First()
 					if name == "" {
-						return printJSON(vars)
+						return printJSON(m.Variables)
 					}
-					for _, v := range vars {
+					for _, v := range m.Variables {
 						if v.Name == name {
 							return printJSON(v)
 						}
@@ -229,12 +272,12 @@ func outputCommand() *cli.Command {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					s := newServer(cmd)
 					defer s.Cleanup()
-					outs, err := s.GetOutputs(ctx, requestFromCmd(cmd))
+					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
 						return err
 					}
-					names := make([]string, 0, len(outs))
-					for _, o := range outs {
+					names := make([]string, 0, len(m.Outputs))
+					for _, o := range m.Outputs {
 						names = append(names, o.Name)
 					}
 					printList(names)
@@ -248,15 +291,15 @@ func outputCommand() *cli.Command {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					s := newServer(cmd)
 					defer s.Cleanup()
-					outs, err := s.GetOutputs(ctx, requestFromCmd(cmd))
+					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
 						return err
 					}
 					name := cmd.Args().First()
 					if name == "" {
-						return printJSON(outs)
+						return printJSON(m.Outputs)
 					}
-					for _, o := range outs {
+					for _, o := range m.Outputs {
 						if o.Name == name {
 							return printJSON(o)
 						}
@@ -281,12 +324,12 @@ func providerCommand() *cli.Command {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					s := newServer(cmd)
 					defer s.Cleanup()
-					reqs, err := s.GetProviderRequirements(ctx, requestFromCmd(cmd))
+					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
 						return err
 					}
-					names := make([]string, 0, len(reqs))
-					for n := range reqs {
+					names := make([]string, 0, len(m.RequiredProviders))
+					for n := range m.RequiredProviders {
 						names = append(names, n)
 					}
 					sort.Strings(names)
@@ -301,15 +344,15 @@ func providerCommand() *cli.Command {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					s := newServer(cmd)
 					defer s.Cleanup()
-					reqs, err := s.GetProviderRequirements(ctx, requestFromCmd(cmd))
+					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
 						return err
 					}
 					name := cmd.Args().First()
 					if name == "" {
-						return printJSON(reqs)
+						return printJSON(m.RequiredProviders)
 					}
-					pr, ok := reqs[name]
+					pr, ok := m.RequiredProviders[name]
 					if !ok {
 						return fmt.Errorf("provider %q not found in required_providers", name)
 					}
@@ -339,24 +382,6 @@ func submoduleCommand() *cli.Command {
 					}
 					printList(subs)
 					return nil
-				},
-			},
-			{
-				Name:      "schema",
-				Usage:     "Print full schema for one submodule by path (e.g. modules/network)",
-				ArgsUsage: "<submodule-path>",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					args := cmd.Args()
-					if args.Len() < 1 {
-						return fmt.Errorf("submodule path is required (e.g. modules/network)")
-					}
-					s := newServer(cmd)
-					defer s.Cleanup()
-					m, err := s.GetSubmodule(ctx, requestFromCmd(cmd), args.First())
-					if err != nil {
-						return err
-					}
-					return printJSON(m)
 				},
 			},
 		},
