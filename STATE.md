@@ -40,11 +40,11 @@ Progress tracking for the implementation described in [PLAN.md](PLAN.md).
 - [x] cmd/tfmoduleschema/main.go (urfave/cli/v3: module/variables/outputs/providers/submodules/version)
 
 ### 8. Integration + release
-- [ ] Integration tests (network, both registries)
-- [ ] Example tests (godoc-runnable)
-- [ ] Full README with usage
-- [ ] .goreleaser.yaml
-- [ ] release workflow
+- [x] Integration tests (network, both registries)
+- [x] Example tests (godoc-runnable)
+- [x] Full README with usage
+- [x] .goreleaser.yaml
+- [x] release workflow
 
 ## Notes / decisions log
 
