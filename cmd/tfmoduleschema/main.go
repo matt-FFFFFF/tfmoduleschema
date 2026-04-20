@@ -127,6 +127,9 @@ func submoduleFromCmd(cmd *cli.Command) (string, error) {
 	if strings.ContainsRune(raw, '\\') {
 		return "", fmt.Errorf("invalid --submodule path %q: use forward slashes", raw)
 	}
+	if hasWindowsVolume(raw) {
+		return "", fmt.Errorf("invalid --submodule path %q: must be relative to the module root", raw)
+	}
 	if path.IsAbs(raw) {
 		return "", fmt.Errorf("invalid --submodule path %q: must be relative to the module root", raw)
 	}
@@ -138,6 +141,18 @@ func submoduleFromCmd(cmd *cli.Command) (string, error) {
 		return "", fmt.Errorf("invalid --submodule path %q: must not escape the module root", raw)
 	}
 	return cleaned, nil
+}
+
+// hasWindowsVolume reports whether p begins with a Windows drive-letter
+// volume (e.g. "C:", "C:/foo"). path.IsAbs only recognises '/'-rooted
+// paths, so we check explicitly so --submodule validation is consistent
+// regardless of which OS the CLI is running on.
+func hasWindowsVolume(p string) bool {
+	if len(p) < 2 || p[1] != ':' {
+		return false
+	}
+	c := p[0]
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
 // loadModule fetches either the root module or the submodule designated
