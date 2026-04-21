@@ -189,13 +189,19 @@ func TestResolveTokenForHost_EmptyHost(t *testing.T) {
 // withIsolatedTokenEnv unsets variables that would otherwise cause
 // the token resolver to read a file outside the test's control. HOME
 // is redirected to a temp dir so the default ~/.terraform.d path
-// cannot produce a hit.
+// cannot produce a hit, and the Windows home-directory variables are
+// also redirected since os.UserHomeDir consults USERPROFILE and
+// HOMEDRIVE/HOMEPATH on that platform.
 func withIsolatedTokenEnv(t *testing.T) {
 	t.Helper()
+	home := t.TempDir()
 	t.Setenv("TF_CLI_CONFIG_FILE", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("APPDATA", "")
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
 }
 
 func TestSplitHostPort(t *testing.T) {

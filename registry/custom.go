@@ -87,10 +87,14 @@ func (r *Custom) EndpointKey() string {
 	return endpointKey(r.host, r.opts.baseURL)
 }
 
-// endpointKey composes a host with a short hash of the URL path when
-// the path is non-empty. Shared by Custom and the service-discovery
-// LazyCustom wrapper so cache layout is identical regardless of which
-// entry point created the registry.
+// endpointKey composes a host with a short hash of the full URL
+// when the parsed path is non-empty. The hash input is the full
+// URL (scheme/host/path) rather than the path alone so that two
+// configurations differing only by scheme (an unlikely but
+// possible misconfiguration) still land in distinct directories.
+// Shared by Custom and the service-discovery LazyCustom wrapper
+// so cache layout is identical regardless of which entry point
+// created the registry.
 func endpointKey(host, fullURL string) string {
 	if host == "" {
 		return ""
