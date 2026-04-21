@@ -66,8 +66,9 @@ type Registry interface {
 type Option func(*options)
 
 type options struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL     string
+	httpClient  *http.Client
+	bearerToken string
 }
 
 // WithBaseURL overrides the default base URL. Useful in tests and to point

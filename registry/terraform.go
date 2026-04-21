@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"net/url"
 
 	goversion "github.com/hashicorp/go-version"
 )
@@ -15,7 +16,13 @@ type Terraform struct {
 
 // NewTerraform constructs a HashiCorp Terraform registry client.
 func NewTerraform(opts ...Option) *Terraform {
-	return &Terraform{opts: applyOptions(DefaultTerraformBaseURL, opts)}
+	o := applyOptions(DefaultTerraformBaseURL, opts)
+	host := "registry.terraform.io"
+	if u, err := url.Parse(o.baseURL); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	applyBearer(&o, host)
+	return &Terraform{opts: o}
 }
 
 // BaseURL returns the base URL of this Terraform client.

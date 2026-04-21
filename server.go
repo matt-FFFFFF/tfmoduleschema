@@ -35,8 +35,11 @@ type Server struct {
 
 // moduleKey is the canonical cache key for an in-memory Module entry.
 // Submodule path is included so root and submodule results are distinct.
+// host is only populated for RegistryTypeCustom entries and keeps
+// entries from distinct custom registries separate.
 type moduleKey struct {
 	registry RegistryType
+	host     string
 	ns, name string
 	system   string
 	version  string
@@ -79,6 +82,36 @@ func WithRegistry(t RegistryType, r registry.Registry) ServerOption {
 	}
 }
 
+// WithCustomRegistry installs a custom (private, mirror, or
+// self-hosted) module registry. input may be any of:
+//
+//   - a full URL with path, e.g. "https://registry.internal/v1/modules"
+//   - a host-only URL, e.g. "https://compliance.tf"
+//   - a bare host, e.g. "compliance.tf" or "registry.internal:8443"
+//
+// For host-only inputs, Terraform remote service discovery is used at
+// first call to resolve the modules.v1 endpoint:
+// https://developer.hashicorp.com/terraform/internals/remote-service-discovery
+//
+// The input host (not the discovered endpoint host) is used for cache
+// keying and credential lookup, so switching --registry-url reliably
+// invalidates the cache even if two hosts publish the same modules.v1
+// base.
+func WithCustomRegistry(input string, opts ...registry.Option) ServerOption {
+	return func(s *Server) {
+		// Validate the input shape up front so obvious programmer
+		// errors surface at option-application time rather than at
+		// first request.
+		if _, _, err := registry.DiscoverModulesEndpointInputCheck(input); err != nil {
+			panic(fmt.Errorf("WithCustomRegistry: %w", err))
+		}
+		if s.registries == nil {
+			s.registries = map[RegistryType]registry.Registry{}
+		}
+		s.registries[RegistryTypeCustom] = registry.NewLazyCustom(input, s.httpClient, opts...)
+	}
+}
+
 // CacheDir returns the cache directory in use by this Server.
 func (s *Server) CacheDir() string { return s.cacheDir }
 
@@ -87,18 +120,45 @@ func (s *Server) CacheDir() string { return s.cacheDir }
 func (s *Server) Cleanup() error { return nil }
 
 // registryFor returns the registry client for the given RegistryType,
-// constructing a default if none was injected via WithRegistry.
-func (s *Server) registryFor(t RegistryType) registry.Registry {
+// constructing a default for the public registries if none was injected
+// via WithRegistry. RegistryTypeCustom has no default and must be
+// installed via WithCustomRegistry or WithRegistry before use.
+func (s *Server) registryFor(t RegistryType) (registry.Registry, error) {
 	t = normalizedRegistryType(t)
 	if r, ok := s.registries[t]; ok && r != nil {
-		return r
+		return r, nil
 	}
 	switch t {
 	case RegistryTypeTerraform:
-		return registry.NewTerraform(registry.WithHTTPClient(s.httpClient))
+		return registry.NewTerraform(registry.WithHTTPClient(s.httpClient)), nil
+	case RegistryTypeCustom:
+		return nil, fmt.Errorf("%w: no custom registry configured; install one with WithCustomRegistry or WithRegistry(RegistryTypeCustom, ...)", ErrInvalidRequest)
 	default:
-		return registry.NewOpenTofu(registry.WithHTTPClient(s.httpClient))
+		return registry.NewOpenTofu(registry.WithHTTPClient(s.httpClient)), nil
 	}
+}
+
+// registryHostFor returns the host string used for cache path
+// derivation for the given RegistryType. Only custom registries
+// produce a non-empty host — public registries fold host into their
+// fixed RegistryType identifier. It returns an error when a custom
+// registry is requested but not configured.
+func (s *Server) registryHostFor(t RegistryType) (string, error) {
+	if normalizedRegistryType(t) != RegistryTypeCustom {
+		return "", nil
+	}
+	r, err := s.registryFor(t)
+	if err != nil {
+		return "", err
+	}
+	type hoster interface{ Host() string }
+	if h, ok := r.(hoster); ok {
+		return h.Host(), nil
+	}
+	// An injected custom registry that doesn't expose Host() — fall
+	// back to a stable placeholder so the cache path is still
+	// deterministic.
+	return "custom", nil
 }
 
 // normalise returns a copy of req with defaults applied and basic
@@ -137,7 +197,11 @@ func validateSegment(field, value string) error {
 // version) is available on disk, returning the cache directory. It
 // reports cache status via cacheStatusFn.
 func (s *Server) fetchModule(ctx context.Context, req Request) (string, error) {
-	dir := cacheModuleDir(s.cacheDir, req)
+	host, err := s.registryHostFor(req.RegistryType)
+	if err != nil {
+		return "", err
+	}
+	dir := cacheModuleDir(s.cacheDir, req, host)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -149,7 +213,10 @@ func (s *Server) fetchModule(ctx context.Context, req Request) (string, error) {
 	}
 
 	// Miss. Ask the registry for the download URL.
-	reg := s.registryFor(req.RegistryType)
+	reg, err := s.registryFor(req.RegistryType)
+	if err != nil {
+		return "", err
+	}
 	loc, err := reg.ResolveDownload(ctx, registry.DownloadRequest{
 		Namespace: req.Namespace, Name: req.Name, System: req.System, Version: req.Version,
 	})
@@ -169,6 +236,44 @@ func (s *Server) fireCacheStatus(req Request, status CacheStatus) {
 	if s.cacheStatusFn != nil {
 		s.cacheStatusFn(req, status)
 	}
+}
+
+// fetchSource resolves a raw go-getter Source URL to a directory on
+// disk, either by returning the local path directly (for local
+// sources) or by downloading into a hashed cache directory. The
+// in-memory mutex is used to serialise concurrent downloads of the
+// same source.
+func (s *Server) fetchSource(ctx context.Context, req Request) (string, error) {
+	if isLocalSource(req.Source) {
+		abs, err := localSourcePath(req.Source)
+		if err != nil {
+			return "", err
+		}
+		if _, err := statDir(abs); err != nil {
+			return "", fmt.Errorf("local source %q: %w", req.Source, err)
+		}
+		s.fireCacheStatus(req, CacheStatusHit)
+		s.l.Debug("local source", "source", req.Source, "dir", abs)
+		return abs, nil
+	}
+
+	dir := cacheSourceDir(s.cacheDir, req.Source)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.forceFetch && cacheDirExistsNonEmpty(dir) {
+		s.fireCacheStatus(req, CacheStatusHit)
+		s.l.Debug("source cache hit", "source", req.Source, "dir", dir)
+		return dir, nil
+	}
+
+	s.fireCacheStatus(req, CacheStatusMiss)
+	s.l.Debug("downloading source", "source", req.Source, "dir", dir)
+	if err := s.downloader.Fetch(ctx, req.Source, dir); err != nil {
+		return "", fmt.Errorf("fetching source %q: %w", req.Source, err)
+	}
+	return dir, nil
 }
 
 // discardWriter is an io.Writer that drops all output; used for the

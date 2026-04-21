@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"net/url"
 
 	goversion "github.com/hashicorp/go-version"
 )
@@ -15,7 +16,13 @@ type OpenTofu struct {
 
 // NewOpenTofu constructs an OpenTofu registry client.
 func NewOpenTofu(opts ...Option) *OpenTofu {
-	return &OpenTofu{opts: applyOptions(DefaultOpenTofuBaseURL, opts)}
+	o := applyOptions(DefaultOpenTofuBaseURL, opts)
+	host := "registry.opentofu.org"
+	if u, err := url.Parse(o.baseURL); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	applyBearer(&o, host)
+	return &OpenTofu{opts: o}
 }
 
 // BaseURL returns the base URL of this OpenTofu client.
