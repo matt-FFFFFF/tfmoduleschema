@@ -106,3 +106,28 @@ func TestDownloader_Fetch_PreservesDestOnFailure(t *testing.T) {
 	_, statErr = os.Stat(dest + ".backup")
 	assert.True(t, os.IsNotExist(statErr), "backup should be cleaned up on failure, got %v", statErr)
 }
+
+// TestDownloader_Fetch_RecoversOrphanedBackup: if a previous call
+// crashed after moving dest → <dest>.backup but before renaming the
+// partial into place, a subsequent Fetch call must restore the backup
+// rather than blindly deleting it. When the upstream fetch then fails,
+// the caller's last known-good cache entry must still be intact.
+func TestDownloader_Fetch_RecoversOrphanedBackup(t *testing.T) {
+	t.Parallel()
+	dest := filepath.Join(t.TempDir(), "out")
+	backup := dest + ".backup"
+	// Simulate a prior interrupted run: dest missing, backup present.
+	require.NoError(t, os.MkdirAll(backup, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(backup, "recovered.tf"), []byte(`variable "r" {}`), 0o644))
+
+	d := &downloader{}
+	// Force the download to fail so we can observe the recovered state.
+	err := d.Fetch(context.Background(), "/definitely/does/not/exist/tfmoduleschema-test", dest)
+	require.Error(t, err)
+
+	// Backup should have been promoted to dest before the (failing) download.
+	_, statErr := os.Stat(filepath.Join(dest, "recovered.tf"))
+	assert.NoError(t, statErr, "orphaned backup should have been restored to dest")
+	_, statErr = os.Stat(backup)
+	assert.True(t, os.IsNotExist(statErr), "backup should no longer exist after recovery, got %v", statErr)
+}
