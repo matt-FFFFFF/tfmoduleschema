@@ -82,3 +82,25 @@ func TestDownloader_Fetch_ReplacesExistingDest(t *testing.T) {
 	_, err = os.Stat(filepath.Join(dest, "stale.tf"))
 	assert.True(t, os.IsNotExist(err), "stale file should have been removed, got %v", err)
 }
+
+// TestDownloader_Fetch_PreservesDestOnFailure: if the download itself
+// fails, the existing dest must be preserved — a transient fetch error
+// must not destroy the last known-good cache entry.
+func TestDownloader_Fetch_PreservesDestOnFailure(t *testing.T) {
+	t.Parallel()
+	dest := filepath.Join(t.TempDir(), "out")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dest, "known-good.tf"), []byte(`variable "k" {}`), 0o644))
+
+	d := &downloader{}
+	// Non-existent local path — go-getter will fail.
+	err := d.Fetch(context.Background(), "/definitely/does/not/exist/tfmoduleschema-test", dest)
+	require.Error(t, err)
+
+	// Known-good file must still be there.
+	_, statErr := os.Stat(filepath.Join(dest, "known-good.tf"))
+	assert.NoError(t, statErr, "existing cache entry should survive a failed fetch")
+	// No stale partial or backup should leak.
+	_, statErr = os.Stat(dest + ".partial")
+	assert.True(t, os.IsNotExist(statErr), "partial should be cleaned up on failure, got %v", statErr)
+}

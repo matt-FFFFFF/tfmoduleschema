@@ -14,9 +14,12 @@ import (
 // never leave a half-extracted cache entry behind on failure.
 type downloader struct{}
 
-// Fetch downloads the module at src into dest (which must not already
-// exist). The download is first extracted into dest + ".partial" and
-// renamed atomically on success.
+// Fetch downloads the module at src into dest, replacing whatever is
+// currently at dest. The download is first extracted into dest +
+// ".partial"; on success any existing dest is moved aside to a backup,
+// the partial is renamed into place, and the backup is removed. On
+// failure the existing dest is restored so a transient fetch error
+// cannot destroy the last known-good cache entry.
 //
 // go-getter interprets src URL prefixes such as "git::", "s3::", etc. and
 // picks an appropriate getter. A "//subdir" suffix selects a subdirectory
@@ -31,19 +34,15 @@ func (d *downloader) Fetch(ctx context.Context, src, dest string) error {
 		return fmt.Errorf("creating cache parent dir %q: %w", parent, err)
 	}
 
-	// Remove any existing cache entry so this Fetch always produces a
-	// fresh copy. Callers (e.g. Server) are responsible for skipping the
-	// call when a cache hit should be honoured; when Fetch is invoked it
-	// must replace whatever is at dest (this is what makes --force-fetch
-	// actually re-fetch). See issue #6.
-	if err := os.RemoveAll(dest); err != nil {
-		return fmt.Errorf("removing stale cache entry %q: %w", dest, err)
-	}
-
 	// Clean up any stale partial from a previous failed attempt.
 	partial := dest + ".partial"
 	if err := os.RemoveAll(partial); err != nil {
 		return fmt.Errorf("removing stale partial %q: %w", partial, err)
+	}
+	// And any stale backup from a previous failed attempt.
+	backup := dest + ".backup"
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("removing stale backup %q: %w", backup, err)
 	}
 
 	client := &getter.Client{}
@@ -54,13 +53,36 @@ func (d *downloader) Fetch(ctx context.Context, src, dest string) error {
 	}
 	if _, err := client.Get(ctx, req); err != nil {
 		// On failure, wipe the partial so the next attempt starts clean.
+		// Leave any existing dest untouched — the caller's last
+		// known-good cache entry is preserved.
 		_ = os.RemoveAll(partial)
 		return fmt.Errorf("downloading %s: %w", src, err)
 	}
 
+	// Download succeeded. Swap the partial into place, preserving the
+	// previous dest in a backup so we can roll back on rename failure.
+	haveBackup := false
+	if _, err := os.Lstat(dest); err == nil {
+		if err := os.Rename(dest, backup); err != nil {
+			_ = os.RemoveAll(partial)
+			return fmt.Errorf("backing up existing cache entry %q: %w", dest, err)
+		}
+		haveBackup = true
+	}
+
 	if err := os.Rename(partial, dest); err != nil {
 		_ = os.RemoveAll(partial)
+		if haveBackup {
+			// Best-effort rollback: restore the previous dest.
+			_ = os.Rename(backup, dest)
+		}
 		return fmt.Errorf("finalising cache entry %q: %w", dest, err)
+	}
+
+	if haveBackup {
+		if err := os.RemoveAll(backup); err != nil {
+			return fmt.Errorf("removing backup cache entry %q: %w", backup, err)
+		}
 	}
 	return nil
 }

@@ -133,13 +133,20 @@ func TestServer_CacheStatusCallback(t *testing.T) {
 // TestServer_ForceFetch_RefetchesModifiedCache is a regression test for
 // issue #6: --force-fetch / WithForceFetch(true) must actually
 // re-download the module even when the cache dir on disk already exists
-// and has been modified by the user. Previously the downloader had an
-// early-return when dest existed, which silently defeated force-fetch.
+// and has been tampered with by the user. Previously the downloader had
+// an early-return when dest existed, which silently defeated
+// force-fetch.
+//
+// The test mutates the on-disk cache entry directly (not the upstream
+// source) so it exercises the exact scenario from the issue: a user
+// edits the cache dir, then re-runs with --force-fetch and expects the
+// original upstream contents to be restored.
 func TestServer_ForceFetch_RefetchesModifiedCache(t *testing.T) {
 	t.Parallel()
-	// Copy the basic fixture into a temp dir so we can mutate the cache
-	// without touching testdata (the local-file getter symlinks the
-	// cache entry to the source directory).
+	// Copy the basic fixture into a temp dir so our test owns the
+	// upstream source (the local-file getter may symlink the cache
+	// entry to this directory, and we want to be free to replace that
+	// symlink without affecting testdata).
 	srcDir := t.TempDir()
 	require.NoError(t, copyDir(filepath.Join("testdata", "basic"), srcDir))
 
@@ -149,6 +156,11 @@ func TestServer_ForceFetch_RefetchesModifiedCache(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	req := Request{Namespace: "n", Name: "m", System: "s"}
+	concreteReq := Request{
+		Namespace: "n", Name: "m", System: "s", Version: "1.0.0",
+		RegistryType: RegistryTypeOpenTofu,
+	}
+	modDir := cacheModuleDir(cacheDir, concreteReq)
 
 	// Populate the cache without force-fetch.
 	s1 := NewServer(nil,
@@ -158,14 +170,16 @@ func TestServer_ForceFetch_RefetchesModifiedCache(t *testing.T) {
 	_, err := s1.GetModule(context.Background(), req)
 	require.NoError(t, err)
 
-	// Simulate a user mutating the upstream source between fetches.
-	// Because go-getter's local-file getter symlinks the cache entry to
-	// srcDir, we mutate srcDir directly.
-	require.NoError(t, os.Remove(filepath.Join(srcDir, "main.tf")))
-	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "fresh.tf"), []byte(`variable "fresh" {}`), 0o644))
+	// Simulate a user tampering with the cache entry itself. go-getter's
+	// local-file getter populates modDir as a symlink; replace it with a
+	// real directory that looks "modified" so we're testing the cache
+	// layer directly, not the symlink indirection.
+	require.NoError(t, os.RemoveAll(modDir))
+	require.NoError(t, os.MkdirAll(modDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(modDir, "tampered.tf"), []byte(`# tampered`), 0o644))
 
 	// New server with force-fetch enabled. It must re-resolve and
-	// re-link/copy the upstream source even though cacheDir already
+	// re-fetch the upstream source even though cacheDir already
 	// contains an entry for this version.
 	var statuses []CacheStatus
 	s2 := NewServer(nil,
@@ -180,15 +194,12 @@ func TestServer_ForceFetch_RefetchesModifiedCache(t *testing.T) {
 	// Must have reported a miss, meaning the download path was taken.
 	require.Equal(t, []CacheStatus{CacheStatusMiss}, statuses)
 
-	// The cache entry must now reflect the mutated source.
-	modDir := cacheModuleDir(cacheDir, Request{
-		Namespace: "n", Name: "m", System: "s", Version: "1.0.0",
-		RegistryType: RegistryTypeOpenTofu,
-	})
-	_, err = os.Stat(filepath.Join(modDir, "fresh.tf"))
-	assert.NoError(t, err, "fresh.tf should appear in cache after force-fetch")
+	// The tampered file must be gone and the pristine upstream contents
+	// restored.
+	_, err = os.Stat(filepath.Join(modDir, "tampered.tf"))
+	assert.True(t, os.IsNotExist(err), "tampered.tf should have been removed by force-fetch, got %v", err)
 	_, err = os.Stat(filepath.Join(modDir, "main.tf"))
-	assert.True(t, os.IsNotExist(err), "main.tf should no longer be in cache after force-fetch, got %v", err)
+	assert.NoError(t, err, "main.tf should be restored in cache after force-fetch")
 }
 
 // copyDir recursively copies src into dst (which must already exist).
