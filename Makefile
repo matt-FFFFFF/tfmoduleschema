@@ -4,6 +4,7 @@ help:
 	@echo "  test       - Run tests"
 	@echo "  test-short - Run tests excluding network integration tests"
 	@echo "  build      - Build the CLI binary"
+	@echo "  install    - Install the CLI binary to \$$GOBIN (or \$$GOPATH/bin)"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  tidy       - Run go mod tidy"
 
@@ -18,6 +19,10 @@ test-short:
 .PHONY: build
 build:
 	go build -o dist/tfmoduleschema ./cmd/tfmoduleschema
+
+.PHONY: install
+install:
+	go install ./cmd/tfmoduleschema
 
 .PHONY: clean
 clean:
