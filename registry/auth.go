@@ -119,5 +119,74 @@ func (t *bearerTransport) shouldAuth(req *http.Request) bool {
 	if t.host == "" || t.token == "" {
 		return false
 	}
-	return strings.EqualFold(req.URL.Host, t.host)
+	return hostsMatch(req.URL.Scheme, req.URL.Host, t.host)
+}
+
+// hostsMatch reports whether a request URL host matches the
+// configured bearer-token host under default-port normalization.
+//
+// Both sides are lowercased. If one side carries an explicit port
+// and the other does not, the port-less side is treated as carrying
+// the scheme's default port before comparison, so that for example
+// "registry.example.com" matches "registry.example.com:443" under
+// scheme "https" (and :80 under "http"). If BOTH sides specify a
+// port they must match exactly.
+//
+// scheme is taken from the request URL; it is only consulted when
+// exactly one side omits the port.
+func hostsMatch(scheme, reqHost, cfgHost string) bool {
+	reqHost = strings.ToLower(reqHost)
+	cfgHost = strings.ToLower(cfgHost)
+	if reqHost == cfgHost {
+		return true
+	}
+	reqH, reqP := splitHostPortLoose(reqHost)
+	cfgH, cfgP := splitHostPortLoose(cfgHost)
+	if reqH != cfgH {
+		return false
+	}
+	if reqP == "" && cfgP == "" {
+		return true
+	}
+	defaultPort := ""
+	switch strings.ToLower(scheme) {
+	case "https":
+		defaultPort = "443"
+	case "http":
+		defaultPort = "80"
+	}
+	if reqP == "" {
+		reqP = defaultPort
+	}
+	if cfgP == "" {
+		cfgP = defaultPort
+	}
+	return reqP != "" && reqP == cfgP
+}
+
+// splitHostPortLoose splits "host:port" into host and port. Unlike
+// net.SplitHostPort it tolerates bare hosts (returning port "") and
+// never returns an error, because bearer-host matching must succeed
+// or fail as a boolean without disturbing the RoundTrip error path.
+// IPv6 literals are supported in their bracketed form
+// ("[::1]:8443").
+func splitHostPortLoose(hp string) (host, port string) {
+	if hp == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(hp, "[") {
+		// "[v6]:port" or bare "[v6]".
+		if i := strings.LastIndex(hp, "]"); i >= 0 {
+			host = hp[:i+1]
+			rest := hp[i+1:]
+			if strings.HasPrefix(rest, ":") {
+				port = rest[1:]
+			}
+			return host, port
+		}
+	}
+	if i := strings.LastIndex(hp, ":"); i >= 0 && !strings.Contains(hp[:i], ":") {
+		return hp[:i], hp[i+1:]
+	}
+	return hp, ""
 }

@@ -229,3 +229,38 @@ func TestBearerTransport_WithBearerHost_Matches(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer sekrit", gotAuth)
 }
+
+// TestHostsMatch_DefaultPortNormalization verifies that bearer-host
+// comparison treats an omitted port as the scheme's default port on
+// exactly one side. When both sides carry a port (or neither does),
+// comparison is exact.
+func TestHostsMatch_DefaultPortNormalization(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		scheme string
+		req    string
+		cfg    string
+		want   bool
+	}{
+		{"exact match, no port", "https", "reg.example.com", "reg.example.com", true},
+		{"exact match, both port", "https", "reg.example.com:8443", "reg.example.com:8443", true},
+		{"req has default https port, cfg does not", "https", "reg.example.com:443", "reg.example.com", true},
+		{"cfg has default https port, req does not", "https", "reg.example.com", "reg.example.com:443", true},
+		{"req has default http port, cfg does not", "http", "reg.example.com:80", "reg.example.com", true},
+		{"cfg has default http port, req does not", "http", "reg.example.com", "reg.example.com:80", true},
+		{"different non-default ports do NOT match", "https", "reg.example.com:8443", "reg.example.com:9443", false},
+		{"one side non-default port, other none, does NOT match", "https", "reg.example.com:8443", "reg.example.com", false},
+		{"different hosts never match", "https", "a.example.com", "b.example.com", false},
+		{"case-insensitive host match", "https", "REG.Example.COM", "reg.example.com", true},
+		{"IPv6 literal exact", "https", "[::1]:8443", "[::1]:8443", true},
+		{"IPv6 literal different port", "https", "[::1]:8443", "[::1]:9443", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hostsMatch(tc.scheme, tc.req, tc.cfg)
+			assert.Equal(t, tc.want, got, "hostsMatch(%q,%q,%q)", tc.scheme, tc.req, tc.cfg)
+		})
+	}
+}
