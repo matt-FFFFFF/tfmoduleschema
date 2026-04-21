@@ -18,6 +18,12 @@ var forcedGetterRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)::(.+)$`)
 // urlSchemeRE matches a URL scheme prefix (e.g. "https://", "s3://").
 var urlSchemeRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+\-.]*://`)
 
+// windowsDriveRE matches a Windows drive-letter absolute path prefix
+// (e.g. "C:\", "c:/"). Detection is platform-independent so Windows
+// paths are classified correctly regardless of the host OS (relevant
+// for tests and cross-platform source strings).
+var windowsDriveRE = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
+
 // isLocalSource reports whether src refers to a path on the local
 // filesystem. Local sources are inspected in place and never copied
 // into the module cache.
@@ -33,8 +39,11 @@ var urlSchemeRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+\-.]*://`)
 //   - "file::..." or "file://...": local
 //   - any other "<getter>::" prefix (git::, s3::, ...): remote
 //   - any "<scheme>://" prefix: remote
-//   - absolute path ("/..."): local
-//   - relative path starting with "./", "../", or equal to "." / "..": local
+//   - Unix absolute path ("/..."): local
+//   - Windows drive-letter absolute path ("C:\..." / "c:/..."): local
+//   - UNC path ("\\server\share\..."): local
+//   - relative path starting with "./", "../", ".\\", "..\\", or
+//     equal to "." / "..": local
 //   - anything else (bare shorthand like "github.com/x/y"): remote
 //
 // The actual path normalisation for local sources is delegated to
@@ -52,8 +61,15 @@ func isLocalSource(src string) bool {
 	if strings.HasPrefix(src, "/") {
 		return true
 	}
+	if windowsDriveRE.MatchString(src) {
+		return true
+	}
+	if strings.HasPrefix(src, `\\`) {
+		return true
+	}
 	if src == "." || src == ".." ||
-		strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") {
+		strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") ||
+		strings.HasPrefix(src, `.\`) || strings.HasPrefix(src, `..\`) {
 		return true
 	}
 	return false

@@ -253,3 +253,40 @@ func TestServer_CustomRegistry_CacheScopingByHost(t *testing.T) {
 	// Expect two distinct host subdirs.
 	require.Len(t, entries, 2, "expected two host-scoped cache subdirs under %s", customRoot)
 }
+
+// TestServer_CustomRegistry_ConcurrentRegistryFor verifies that
+// concurrent calls to GetModule on a cold custom registry do not race
+// or deadlock. This is a regression guard for the registryFor
+// locking: the read path must not hold s.mu across the
+// NewLazyCustom materialisation, and fetchModule must not hold s.mu
+// across registryFor.
+func TestServer_CustomRegistry_ConcurrentRegistryFor(t *testing.T) {
+	t.Parallel()
+	srv := fakeRegistryServer(t, filepath.Join("testdata", "basic"), []string{"1.0.0"})
+	defer srv.Close()
+
+	s := NewServer(nil,
+		WithCacheDir(t.TempDir()),
+		WithCustomRegistry(srv.URL+"/v1/modules"),
+	)
+	defer s.Cleanup()
+
+	req := Request{
+		Namespace:    "anton",
+		Name:         "mod",
+		System:       "aws",
+		RegistryType: RegistryTypeCustom,
+	}
+
+	const n = 8
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			_, err := s.GetModule(context.Background(), req)
+			errs <- err
+		}()
+	}
+	for i := 0; i < n; i++ {
+		require.NoError(t, <-errs)
+	}
+}

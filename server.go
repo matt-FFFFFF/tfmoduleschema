@@ -160,9 +160,12 @@ func (s *Server) Cleanup() error { return nil }
 // still takes effect.
 func (s *Server) registryFor(t RegistryType) (registry.Registry, error) {
 	t = normalizedRegistryType(t)
+	s.mu.RLock()
 	if r, ok := s.registries[t]; ok && r != nil {
+		s.mu.RUnlock()
 		return r, nil
 	}
+	s.mu.RUnlock()
 	switch t {
 	case RegistryTypeTerraform:
 		return registry.NewTerraform(registry.WithHTTPClient(s.httpClient)), nil
@@ -254,6 +257,14 @@ func (s *Server) fetchModule(ctx context.Context, req Request) (string, error) {
 	}
 	dir := cacheModuleDir(s.cacheDir, req, host)
 
+	// Resolve the registry before taking the Server mutex: registryFor
+	// takes its own locks internally and must not be called while we
+	// hold s.mu.
+	reg, err := s.registryFor(req.RegistryType)
+	if err != nil {
+		return "", err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -264,10 +275,6 @@ func (s *Server) fetchModule(ctx context.Context, req Request) (string, error) {
 	}
 
 	// Miss. Ask the registry for the download URL.
-	reg, err := s.registryFor(req.RegistryType)
-	if err != nil {
-		return "", err
-	}
 	loc, err := reg.ResolveDownload(ctx, registry.DownloadRequest{
 		Namespace: req.Namespace, Name: req.Name, System: req.System, Version: req.Version,
 	})

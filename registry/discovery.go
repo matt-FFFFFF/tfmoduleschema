@@ -41,8 +41,12 @@ const ModulesV1Key = "modules.v1"
 // the original host supplied by the caller (lowercased, with port
 // preserved), useful for credential lookup.
 //
-// HTTPS is required per the spec; http:// input is only accepted for
-// the full-URL-with-path bypass case.
+// HTTPS is required per the spec for discovery requests. An http://
+// input with only a host is accepted and treated like host-only
+// input: the scheme is discarded and HTTPS is used for discovery. A
+// full URL with a path bypasses discovery entirely and is returned
+// verbatim, in which case http:// is also allowed (the caller is
+// asserting the modules.v1 endpoint directly, e.g. a test server).
 func DiscoverModulesEndpoint(ctx context.Context, client *http.Client, input string) (baseURL, inputHost string, err error) {
 	if client == nil {
 		client = http.DefaultClient
