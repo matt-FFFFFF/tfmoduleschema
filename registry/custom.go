@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"strings"
@@ -73,6 +75,37 @@ func (r *Custom) BaseURL() string { return r.opts.baseURL }
 // stable on-disk cache directory and to scope bearer-token injection
 // when no explicit WithBearerHost was supplied.
 func (r *Custom) Host() string { return r.host }
+
+// EndpointKey returns a stable, filesystem-safe identifier for this
+// registry endpoint that distinguishes distinct paths on the same
+// host. Two Custom registries configured at
+// https://h.example.com/teamA/v1/modules and .../teamB/v1/modules
+// share a Host but produce different EndpointKey values, so their
+// on-disk caches do not collide. When the baseURL path is empty
+// (discovery resolved to the host root) EndpointKey equals Host.
+func (r *Custom) EndpointKey() string {
+	return endpointKey(r.host, r.opts.baseURL)
+}
+
+// endpointKey composes a host with a short hash of the URL path when
+// the path is non-empty. Shared by Custom and the service-discovery
+// LazyCustom wrapper so cache layout is identical regardless of which
+// entry point created the registry.
+func endpointKey(host, fullURL string) string {
+	if host == "" {
+		return ""
+	}
+	u, err := url.Parse(fullURL)
+	if err != nil {
+		return host
+	}
+	path := strings.Trim(u.Path, "/")
+	if path == "" {
+		return host
+	}
+	sum := sha256.Sum256([]byte(fullURL))
+	return host + "_" + hex.EncodeToString(sum[:4])
+}
 
 // ListVersions returns all versions of the requested module.
 func (r *Custom) ListVersions(ctx context.Context, req VersionsRequest) (goversion.Collection, error) {

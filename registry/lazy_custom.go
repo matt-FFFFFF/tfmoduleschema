@@ -14,8 +14,9 @@ import (
 // Registry interface and is safe for concurrent use.
 //
 // The caller-supplied input (host, host:port, or full URL) is used for
-// cache keying and credential lookup via Host(); the discovered
-// modules.v1 endpoint is used for actual registry API calls.
+// credential lookup via Host() and for cache keying via EndpointKey();
+// the discovered modules.v1 endpoint is used for actual registry API
+// calls.
 type LazyCustom struct {
 	input string
 	opts  []Option
@@ -46,15 +47,31 @@ func NewLazyCustom(input string, httpClient *http.Client, opts ...Option) *LazyC
 
 // Host returns the input host (lowercased, with port preserved) used
 // for this custom registry. This is the value callers should use for
-// cache keying and credential lookup, regardless of whether the
-// discovered modules.v1 URL points at a different host. Host works
-// without triggering discovery.
+// credential lookup, regardless of whether the discovered modules.v1
+// URL points at a different host. Host works without triggering
+// discovery.
 func (l *LazyCustom) Host() string {
 	_, host, err := parseInputHost(l.input)
 	if err != nil {
 		return ""
 	}
 	return host
+}
+
+// EndpointKey returns a stable, filesystem-safe identifier for this
+// registry endpoint that distinguishes distinct paths on the same
+// host (relevant when input is a full URL with a path rather than a
+// bare host for discovery). For bare-host inputs EndpointKey equals
+// Host. Works without triggering discovery.
+func (l *LazyCustom) EndpointKey() string {
+	bypass, host, err := parseInputHost(l.input)
+	if err != nil {
+		return ""
+	}
+	if bypass == "" {
+		return host
+	}
+	return endpointKey(host, bypass)
 }
 
 // BaseURL triggers resolution and returns the resolved base URL, or

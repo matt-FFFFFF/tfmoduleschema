@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -118,4 +119,27 @@ func TestCustom_HeaderStyle(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "git::https://example.com/mod.git?ref=v1.0.0", loc)
+}
+
+// TestCustom_EndpointKey: two Custom registries served from the same
+// host but different paths must produce different EndpointKey values
+// so the Server can keep their on-disk caches separate. A single
+// registry with an empty path must produce EndpointKey == Host.
+func TestCustom_EndpointKey(t *testing.T) {
+	t.Parallel()
+
+	a, err := NewCustom("https://reg.example.com/teamA/v1/modules")
+	require.NoError(t, err)
+	b, err := NewCustom("https://reg.example.com/teamB/v1/modules")
+	require.NoError(t, err)
+	rootA, err := NewCustom("https://reg.example.com")
+	require.NoError(t, err)
+
+	assert.Equal(t, a.Host(), b.Host(), "same host must yield same Host()")
+	assert.NotEqual(t, a.EndpointKey(), b.EndpointKey(),
+		"distinct paths on same host must yield distinct EndpointKey")
+	assert.True(t, strings.HasPrefix(a.EndpointKey(), a.Host()+"_"),
+		"EndpointKey for pathed input must extend Host with a suffix")
+	assert.Equal(t, rootA.Host(), rootA.EndpointKey(),
+		"empty path must make EndpointKey identical to Host")
 }

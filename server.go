@@ -208,6 +208,13 @@ func (s *Server) registryFor(t RegistryType) (registry.Registry, error) {
 // produce a non-empty host — public registries fold host into their
 // fixed RegistryType identifier. It returns an error when a custom
 // registry is requested but not configured.
+//
+// For custom registries the value prefers EndpointKey() over Host():
+// EndpointKey disambiguates multiple registries served from the same
+// host at different paths (e.g. /teamA/v1/modules vs /teamB/...), so
+// their on-disk caches do not collide. Registries that only
+// implement Host() continue to work and simply use the host as the
+// cache segment.
 func (s *Server) registryHostFor(t RegistryType) (string, error) {
 	if normalizedRegistryType(t) != RegistryTypeCustom {
 		return "", nil
@@ -216,16 +223,22 @@ func (s *Server) registryHostFor(t RegistryType) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	type endpointKeyer interface{ EndpointKey() string }
+	if k, ok := r.(endpointKeyer); ok {
+		if key := k.EndpointKey(); key != "" {
+			return key, nil
+		}
+	}
 	type hoster interface{ Host() string }
 	if h, ok := r.(hoster); ok {
 		if host := h.Host(); host != "" {
 			return host, nil
 		}
 	}
-	// Host() was absent or empty — derive the host from BaseURL()
-	// (which every Registry must expose). This keeps cache entries
-	// from distinct injected custom registries isolated even when
-	// they don't implement Host().
+	// Neither EndpointKey nor Host yielded anything — derive the
+	// host from BaseURL() (which every Registry must expose). This
+	// keeps cache entries from distinct injected custom registries
+	// isolated even when they implement neither method.
 	if base := r.BaseURL(); base != "" {
 		if u, err := url.Parse(base); err == nil && u.Host != "" {
 			return u.Host, nil

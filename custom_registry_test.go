@@ -42,13 +42,26 @@ func TestServer_CustomRegistry_EndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, m.Variables)
 
-	// Confirm the cache lives under custom/<host>/… with the host
-	// extracted from srv.URL.
+	// Confirm the cache lives under custom/<sanitizedHost>[_hash]/…
+	// The hash suffix is present because the configured input is a
+	// full URL with a non-empty path (/v1/modules) — see
+	// Custom.EndpointKey. We don't pin the exact hash value; we
+	// just assert that exactly one matching directory exists.
 	host := strings.TrimPrefix(srv.URL, "http://")
 	host = strings.TrimPrefix(host, "https://")
-	customRoot := filepath.Join(cacheDir, "custom", sanitizeHost(host))
-	entries, err := os.ReadDir(customRoot)
-	require.NoError(t, err, "custom registry cache root should exist at %s", customRoot)
+	sanitized := sanitizeHost(host)
+	customBase := filepath.Join(cacheDir, "custom")
+	bases, err := os.ReadDir(customBase)
+	require.NoError(t, err, "custom registry cache base should exist at %s", customBase)
+	var matches []string
+	for _, e := range bases {
+		if e.IsDir() && (e.Name() == sanitized || strings.HasPrefix(e.Name(), sanitized+"_")) {
+			matches = append(matches, e.Name())
+		}
+	}
+	require.Len(t, matches, 1, "expected exactly one cache dir under %s for host %s, got %v", customBase, sanitized, matches)
+	entries, err := os.ReadDir(filepath.Join(customBase, matches[0]))
+	require.NoError(t, err)
 	require.NotEmpty(t, entries)
 }
 
