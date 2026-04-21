@@ -2,11 +2,9 @@ package tfmoduleschema
 
 import (
 	"fmt"
-	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
-
-	getter "github.com/hashicorp/go-getter/v2"
 )
 
 // forcedGetterRE matches the "xxx::" forced-getter prefix syntax
@@ -28,12 +26,7 @@ var windowsDriveRE = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
 // filesystem. Local sources are inspected in place and never copied
 // into the module cache.
 //
-// Only explicit local-path forms are treated as local. Bare strings
-// without a scheme, forced-getter prefix, or leading ./ ../ / are
-// treated as remote go-getter shorthand (e.g. "github.com/org/repo"),
-// matching Terraform's module-source conventions.
-//
-// The classification is:
+// Classification:
 //
 //   - empty string: not local
 //   - "file::..." or "file://...": local
@@ -42,9 +35,15 @@ var windowsDriveRE = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
 //   - Unix absolute path ("/..."): local
 //   - Windows drive-letter absolute path ("C:\..." / "c:/..."): local
 //   - UNC path ("\\server\share\..."): local
-//   - relative path starting with "./", "../", ".\\", "..\\", or
-//     equal to "." / "..": local
-//   - anything else (bare shorthand like "github.com/x/y"): remote
+//   - any path beginning with "." (e.g. "./foo", "../foo", ".",
+//     "..", ".terraform/modules/x"): local. Terraform and OpenTofu
+//     registry addresses never start with a dot, so this is an
+//     unambiguous local-path marker and is more forgiving than
+//     Terraform's strict "./" / "../" rule for paths like
+//     ".terraform/modules/foo" that users commonly pass in.
+//   - anything else (bare shorthand like "github.com/x/y",
+//     "mydir/mymodule"): remote, matching Terraform's module-source
+//     conventions where undecorated paths are registry addresses.
 //
 // The actual path normalisation for local sources is delegated to
 // go-getter's FileDetector via localSourcePath.
@@ -67,20 +66,28 @@ func isLocalSource(src string) bool {
 	if strings.HasPrefix(src, `\\`) {
 		return true
 	}
-	if src == "." || src == ".." ||
-		strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") ||
-		strings.HasPrefix(src, `.\`) || strings.HasPrefix(src, `..\`) {
+	// Any path beginning with "." is a local path. This covers
+	// "./foo", "../foo", ".", "..", ".\foo", "..\foo", and also
+	// ".terraform/modules/foo" — the latter being a common source
+	// users pass after `terraform init` that Terraform itself would
+	// not accept as a bare module source, but that go-getter's
+	// relative-path handling cannot resolve without an explicit
+	// "./" prefix.
+	if strings.HasPrefix(src, ".") {
 		return true
 	}
 	return false
 }
 
 // localSourcePath converts a local source string into an absolute
-// filesystem path using go-getter's FileDetector, which handles
-// relative-path resolution against the current working directory and
-// symlink following consistently with the rest of go-getter.
+// filesystem path. Local paths are resolved directly against the
+// current working directory with filepath.Abs; go-getter is not
+// involved because local sources are inspected in place and the
+// extra translation go-getter's FileDetector performs (such as
+// forward-slashing paths on Windows for URL use) is inappropriate
+// for paths we then hand to os.Stat / hclparse.
 func localSourcePath(src string) (string, error) {
-	// Strip any "file::" or "file://" prefix so we hand the detector a
+	// Strip any "file::" or "file://" prefix so we're left with a
 	// plain filesystem path.
 	s := src
 	if m := forcedGetterRE.FindStringSubmatch(s); m != nil && strings.EqualFold(m[1], "file") {
@@ -93,18 +100,9 @@ func localSourcePath(src string) (string, error) {
 		return "", fmt.Errorf("empty local source path")
 	}
 
-	pwd, err := os.Getwd()
+	abs, err := filepath.Abs(s)
 	if err != nil {
-		return "", fmt.Errorf("resolving working directory: %w", err)
+		return "", fmt.Errorf("resolving local source %q: %w", src, err)
 	}
-
-	d := new(getter.FileDetector)
-	out, ok, err := d.Detect(s, pwd)
-	if err != nil {
-		return "", fmt.Errorf("detecting local source %q: %w", src, err)
-	}
-	if !ok || out == "" {
-		return "", fmt.Errorf("go-getter FileDetector did not recognise %q as a local path", src)
-	}
-	return out, nil
+	return abs, nil
 }

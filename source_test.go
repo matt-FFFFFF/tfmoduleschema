@@ -23,6 +23,8 @@ func TestIsLocalSource(t *testing.T) {
 		{"../rel", true},
 		{".", true},
 		{"..", true},
+		{".terraform/modules/acm_us_east_1/", true},
+		{".hidden", true},
 		{"some/path", false},
 		{"github.com/org/repo", false},
 		{`C:\src\mod`, true},
