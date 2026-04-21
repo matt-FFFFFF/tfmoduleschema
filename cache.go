@@ -49,6 +49,11 @@ func (c CacheStatus) String() string {
 // be empty or a raw ref embedded in the go-getter URL — because
 // there is no registry to resolve a constraint against. Callbacks
 // that need a concrete version should branch on request.Source.
+//
+// Local-filesystem Source requests (e.g. "./foo", "/abs/path",
+// ".terraform/modules/x") do not invoke this callback: the path on
+// disk is the source of truth and nothing is cached, so reporting
+// "hit" or "miss" would be misleading.
 type CacheStatusFunc func(request Request, status CacheStatus)
 
 // ServerOption configures a Server at construction time.

@@ -90,12 +90,20 @@ func TestGetModule_Source_Local(t *testing.T) {
 	require.NoError(t, err)
 
 	cacheDir := t.TempDir()
-	s := NewServer(nil, WithCacheDir(cacheDir))
+	// Local sources must not invoke the CacheStatus callback:
+	// nothing is cached, and reporting "hit" would be misleading.
+	var statuses []CacheStatus
+	s := NewServer(nil,
+		WithCacheDir(cacheDir),
+		WithCacheStatusFunc(func(_ Request, st CacheStatus) { statuses = append(statuses, st) }),
+	)
 	defer s.Cleanup()
 
 	m, err := s.GetModule(context.Background(), Request{Source: abs})
 	require.NoError(t, err)
 	require.NotNil(t, m)
+
+	assert.Empty(t, statuses, "local sources must not fire CacheStatus")
 
 	// testdata/basic/main.tf declares these variables.
 	var names []string

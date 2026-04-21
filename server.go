@@ -348,7 +348,11 @@ func (s *Server) fetchSource(ctx context.Context, req Request) (string, error) {
 		if _, err := statDir(abs); err != nil {
 			return "", fmt.Errorf("local source %q: %w", req.Source, err)
 		}
-		s.fireCacheStatus(req, CacheStatusHit)
+		// Local sources bypass the cache entirely — the path on
+		// disk is the source of truth. Deliberately skip firing
+		// CacheStatus so callers don't surface a misleading
+		// "cache hit" message for a directory that was never
+		// cached.
 		s.l.Debug("local source", "source", req.Source, "dir", abs)
 		return abs, nil
 	}
