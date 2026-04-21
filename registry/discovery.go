@@ -109,8 +109,11 @@ func DiscoverModulesEndpointInputCheck(input string) (bypass, host string, err e
 
 // discoveryDoc is the shape of the JSON document returned by
 // .well-known/terraform.json. Only modules.v1 is read; other keys are
-// ignored.
-type discoveryDoc map[string]string
+// ignored. Values are kept as raw JSON because some services (e.g.
+// login.v1 on TFC/HCP) advertise objects rather than plain URL strings,
+// and the zero-or-more extra keys must not cause the whole parse to
+// fail.
+type discoveryDoc map[string]json.RawMessage
 
 func fetchDiscovery(ctx context.Context, client *http.Client, discoveryURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
@@ -146,16 +149,23 @@ func fetchDiscovery(ctx context.Context, client *http.Client, discoveryURL strin
 	}
 
 	raw, ok := doc[ModulesV1Key]
-	if !ok || strings.TrimSpace(raw) == "" {
+	if !ok || len(raw) == 0 {
 		return "", fmt.Errorf("%w: %s not present in discovery document", ErrDiscoveryUnsupported, ModulesV1Key)
+	}
+	var ref string
+	if err := json.Unmarshal(raw, &ref); err != nil {
+		return "", fmt.Errorf("%w: %s must be a URL string, got %s", ErrDiscoveryFailed, ModulesV1Key, string(raw))
+	}
+	if strings.TrimSpace(ref) == "" {
+		return "", fmt.Errorf("%w: %s is empty in discovery document", ErrDiscoveryUnsupported, ModulesV1Key)
 	}
 
 	// Resolve against the FINAL discovery URL (after redirects).
 	// resp.Request.URL reflects the last URL in the redirect chain.
 	finalURL := resp.Request.URL
-	base, err := resolveDiscoveryReference(finalURL, raw)
+	base, err := resolveDiscoveryReference(finalURL, ref)
 	if err != nil {
-		return "", fmt.Errorf("%w: resolving modules.v1 value %q: %v", ErrDiscoveryFailed, raw, err)
+		return "", fmt.Errorf("%w: resolving modules.v1 value %q: %v", ErrDiscoveryFailed, ref, err)
 	}
 	return base, nil
 }

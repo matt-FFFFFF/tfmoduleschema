@@ -133,6 +133,45 @@ func TestFetchDiscovery_MissingModulesV1(t *testing.T) {
 	assert.ErrorIs(t, err, ErrDiscoveryUnsupported)
 }
 
+// TestFetchDiscovery_MixedTypeSiblingKeys: real-world discovery docs
+// (TFC/HCP, and privately-hosted registries following their example)
+// advertise some services as objects rather than plain URL strings.
+// A non-string value for an UNRELATED key must not break modules.v1
+// lookup.
+func TestFetchDiscovery_MixedTypeSiblingKeys(t *testing.T) {
+	t.Parallel()
+	body := `{
+      "login.v1": {
+        "authz": "https://auth.example.com/login",
+        "client": "abc",
+        "grant_types": ["authz_code"],
+        "ports": [10000, 10010],
+        "token": "https://auth.example.com/oauth2/token"
+      },
+      "modules.v1": "/v1/modules/",
+      "providers.v1": "/v1/providers/"
+    }`
+	srv := newDiscoveryServer(t, body, "application/json", 0)
+	defer srv.Close()
+
+	base, err := fetchDiscovery(context.Background(), srv.Client(), srv.URL+"/.well-known/terraform.json")
+	require.NoError(t, err)
+	assert.Equal(t, srv.URL+"/v1/modules", base)
+}
+
+// TestFetchDiscovery_ModulesV1NotAString: if modules.v1 itself is not
+// a string, we must fail with ErrDiscoveryFailed (the doc is syntactically
+// valid JSON but semantically wrong) rather than silently ignoring it.
+func TestFetchDiscovery_ModulesV1NotAString(t *testing.T) {
+	t.Parallel()
+	srv := newDiscoveryServer(t, `{"modules.v1":{"url":"/v1/modules/"}}`, "application/json", 0)
+	defer srv.Close()
+
+	_, err := fetchDiscovery(context.Background(), srv.Client(), srv.URL+"/.well-known/terraform.json")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrDiscoveryFailed)
+}
+
 // TestDiscoverModulesEndpoint_FullURLBypass: when input is already a
 // full URL with a non-empty path, discovery is skipped entirely.
 func TestDiscoverModulesEndpoint_FullURLBypass(t *testing.T) {
