@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -127,6 +128,89 @@ func TestServer_CacheStatusCallback(t *testing.T) {
 	_, err = s2.GetModule(context.Background(), req)
 	require.NoError(t, err)
 	require.Equal(t, []CacheStatus{CacheStatusHit}, secondStatuses)
+}
+
+// TestServer_ForceFetch_RefetchesModifiedCache is a regression test for
+// issue #6: --force-fetch / WithForceFetch(true) must actually
+// re-download the module even when the cache dir on disk already exists
+// and has been modified by the user. Previously the downloader had an
+// early-return when dest existed, which silently defeated force-fetch.
+func TestServer_ForceFetch_RefetchesModifiedCache(t *testing.T) {
+	t.Parallel()
+	// Copy the basic fixture into a temp dir so we can mutate the cache
+	// without touching testdata (the local-file getter symlinks the
+	// cache entry to the source directory).
+	srcDir := t.TempDir()
+	require.NoError(t, copyDir(filepath.Join("testdata", "basic"), srcDir))
+
+	srv := fakeRegistryServer(t, srcDir, []string{"1.0.0"})
+	defer srv.Close()
+	reg := registry.NewOpenTofu(registry.WithBaseURL(srv.URL))
+
+	cacheDir := t.TempDir()
+	req := Request{Namespace: "n", Name: "m", System: "s"}
+
+	// Populate the cache without force-fetch.
+	s1 := NewServer(nil,
+		WithCacheDir(cacheDir),
+		WithRegistry(RegistryTypeOpenTofu, reg),
+	)
+	_, err := s1.GetModule(context.Background(), req)
+	require.NoError(t, err)
+
+	// Simulate a user mutating the upstream source between fetches.
+	// Because go-getter's local-file getter symlinks the cache entry to
+	// srcDir, we mutate srcDir directly.
+	require.NoError(t, os.Remove(filepath.Join(srcDir, "main.tf")))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "fresh.tf"), []byte(`variable "fresh" {}`), 0o644))
+
+	// New server with force-fetch enabled. It must re-resolve and
+	// re-link/copy the upstream source even though cacheDir already
+	// contains an entry for this version.
+	var statuses []CacheStatus
+	s2 := NewServer(nil,
+		WithCacheDir(cacheDir),
+		WithRegistry(RegistryTypeOpenTofu, reg),
+		WithForceFetch(true),
+		WithCacheStatusFunc(func(_ Request, st CacheStatus) { statuses = append(statuses, st) }),
+	)
+	_, err = s2.GetModule(context.Background(), req)
+	require.NoError(t, err)
+
+	// Must have reported a miss, meaning the download path was taken.
+	require.Equal(t, []CacheStatus{CacheStatusMiss}, statuses)
+
+	// The cache entry must now reflect the mutated source.
+	modDir := cacheModuleDir(cacheDir, Request{
+		Namespace: "n", Name: "m", System: "s", Version: "1.0.0",
+		RegistryType: RegistryTypeOpenTofu,
+	})
+	_, err = os.Stat(filepath.Join(modDir, "fresh.tf"))
+	assert.NoError(t, err, "fresh.tf should appear in cache after force-fetch")
+	_, err = os.Stat(filepath.Join(modDir, "main.tf"))
+	assert.True(t, os.IsNotExist(err), "main.tf should no longer be in cache after force-fetch, got %v", err)
+}
+
+// copyDir recursively copies src into dst (which must already exist).
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
 }
 
 func TestServer_InvalidRequest(t *testing.T) {

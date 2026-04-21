@@ -26,16 +26,18 @@ func (d *downloader) Fetch(ctx context.Context, src, dest string) error {
 		return fmt.Errorf("empty download source URL")
 	}
 
-	// If the cache entry already exists as a directory, treat as success.
-	// Callers should not call Fetch when they already see a hit, but this
-	// guards against races.
-	if fi, err := os.Stat(dest); err == nil && fi.IsDir() {
-		return nil
-	}
-
 	parent := filepath.Dir(dest)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("creating cache parent dir %q: %w", parent, err)
+	}
+
+	// Remove any existing cache entry so this Fetch always produces a
+	// fresh copy. Callers (e.g. Server) are responsible for skipping the
+	// call when a cache hit should be honoured; when Fetch is invoked it
+	// must replace whatever is at dest (this is what makes --force-fetch
+	// actually re-fetch). See issue #6.
+	if err := os.RemoveAll(dest); err != nil {
+		return fmt.Errorf("removing stale cache entry %q: %w", dest, err)
 	}
 
 	// Clean up any stale partial from a previous failed attempt.

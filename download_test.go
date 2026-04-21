@@ -57,17 +57,28 @@ func TestDownloader_Fetch_HTTPArchive(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestDownloader_Fetch_Idempotent: a second call when dest already exists
-// should be a no-op.
-func TestDownloader_Fetch_Idempotent(t *testing.T) {
+// TestDownloader_Fetch_ReplacesExistingDest: when dest already exists,
+// Fetch must replace its contents with a fresh copy (it is not
+// idempotent by itself — the Server's cache-hit check provides
+// idempotency). This is the regression test for issue #6 at the
+// downloader layer.
+func TestDownloader_Fetch_ReplacesExistingDest(t *testing.T) {
 	t.Parallel()
-	dest := t.TempDir()
-	// pre-seed
-	require.NoError(t, os.WriteFile(filepath.Join(dest, "x"), []byte("y"), 0o644))
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.tf"), []byte(`variable "fresh" {}`), 0o644))
+
+	dest := filepath.Join(t.TempDir(), "out")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
+	// Pre-seed with a stale file that must be removed by Fetch.
+	require.NoError(t, os.WriteFile(filepath.Join(dest, "stale.tf"), []byte("stale"), 0o644))
 
 	d := &downloader{}
-	require.NoError(t, d.Fetch(context.Background(), "/nonexistent/path/should/not/be/used", dest))
-	// File should still be there.
-	_, err := os.Stat(filepath.Join(dest, "x"))
+	require.NoError(t, d.Fetch(context.Background(), src, dest))
+
+	// Fresh file should be present.
+	_, err := os.Stat(filepath.Join(dest, "main.tf"))
 	assert.NoError(t, err)
+	// Stale file must be gone.
+	_, err = os.Stat(filepath.Join(dest, "stale.tf"))
+	assert.True(t, os.IsNotExist(err), "stale file should have been removed, got %v", err)
 }
