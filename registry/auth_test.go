@@ -264,3 +264,42 @@ func TestHostsMatch_DefaultPortNormalization(t *testing.T) {
 		})
 	}
 }
+
+// TestLazyCustom_CallerBearerHostOverride verifies that a caller-
+// supplied WithBearerHost wins over the input-host default that
+// LazyCustom.resolve installs internally. Without this, users who
+// explicitly scope a token to a different host (e.g. a discovery
+// endpoint served from a CDN) would find their override silently
+// discarded.
+func TestLazyCustom_CallerBearerHostOverride(t *testing.T) {
+	t.Parallel()
+
+	// The "registry" server records whether it received an
+	// Authorization header, so we can assert scoping behaviour.
+	var gotAuth string
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[{"version":"1.0.0"}]}]}`))
+	}))
+	defer regSrv.Close()
+
+	// Use a full-URL input so discovery is bypassed. parseInputHost
+	// still reports the input host for bearer-scope defaults.
+	// Caller explicitly scopes the bearer to a DIFFERENT host;
+	// that explicit option must win over LazyCustom's input-host
+	// default so the token is NOT sent to the registry host.
+	l := NewLazyCustom(
+		regSrv.URL+"/v1/modules",
+		regSrv.Client(),
+		WithBearerToken("sekrit"),
+		WithBearerHost("unreachable.example.test"),
+	)
+	_, err := l.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	// The caller's override does not match the registry host, so
+	// the Authorization header should NOT have been sent.
+	assert.Empty(t, gotAuth, "caller WithBearerHost override must win over LazyCustom default")
+}

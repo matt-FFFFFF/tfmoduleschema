@@ -214,6 +214,15 @@ func validateRequestFlags(cmd *cli.Command) error {
 			return fmt.Errorf("invalid --registry-url %q: %w", regURL, err)
 		}
 	}
+	// --registry-token (from flag or TFMODULESCHEMA_REGISTRY_TOKEN)
+	// is only applied when a custom registry is configured via
+	// --registry-url. Silently dropping it would be a security
+	// footgun: a user who thinks they're sending a bearer token to
+	// a public registry could be surprised later when the token
+	// turns out to be unused. Fail fast instead.
+	if regTok != "" && regURL == "" {
+		return fmt.Errorf("--registry-token (or TFMODULESCHEMA_REGISTRY_TOKEN) requires --registry-url")
+	}
 	return nil
 }
 

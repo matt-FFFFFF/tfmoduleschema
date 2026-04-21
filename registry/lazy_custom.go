@@ -111,19 +111,24 @@ func (l *LazyCustom) resolve(ctx context.Context) error {
 		}
 		// Ensure the underlying Custom uses the same httpClient as
 		// discovery (for auth transports installed by the caller).
-		// Scope bearer injection to the INPUT host (the host a token
-		// was resolved for via TF_TOKEN_<host> / credentials.tfrc.json)
-		// so that a discovered modules.v1 endpoint on a different
-		// host does not receive credentials it was not meant to see.
-		// WithBearerHost is applied LAST so it wins over any earlier
-		// (default or caller-supplied) setting; empty inputHost falls
-		// back to the base URL host naturally inside applyBearer.
-		opts := l.opts
-		if l.httpClient != nil {
-			opts = append(opts, WithHTTPClient(l.httpClient))
-		}
+		// Scope bearer injection to the INPUT host (the host a
+		// token was resolved for via TF_TOKEN_<host> /
+		// credentials.tfrc.json) so that a discovered modules.v1
+		// endpoint on a different host does not receive
+		// credentials it was not meant to see.
+		//
+		// WithBearerHost(inputHost) is applied FIRST so it acts as
+		// a default: any caller-supplied WithBearerHost in l.opts
+		// still wins via the standard "last option applied wins"
+		// rule. An empty inputHost falls back to the base URL host
+		// naturally inside applyBearer.
+		var opts []Option
 		if inputHost != "" {
 			opts = append(opts, WithBearerHost(inputHost))
+		}
+		opts = append(opts, l.opts...)
+		if l.httpClient != nil {
+			opts = append(opts, WithHTTPClient(l.httpClient))
 		}
 		c, err := NewCustom(base, opts...)
 		if err != nil {
