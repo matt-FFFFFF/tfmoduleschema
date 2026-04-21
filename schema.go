@@ -2,12 +2,19 @@ package tfmoduleschema
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	goversion "github.com/hashicorp/go-version"
 
 	"github.com/matt-FFFFFF/tfmoduleschema/registry"
 )
+
+// ErrSourceWithConstraint is returned when Request.Source is set
+// together with a non-concrete version constraint. Constraint
+// resolution requires a registry, but Source bypasses the registry, so
+// the caller must supply a concrete (or empty) version.
+var ErrSourceWithConstraint = errors.New("version constraints are not supported with Request.Source; supply a concrete version or embed a ref in the source URL")
 
 // GetAvailableVersions returns all versions the registry advertises for
 // the module identified by req.
@@ -21,7 +28,10 @@ func (s *Server) GetAvailableVersions(ctx context.Context, req VersionsRequest) 
 	}); err != nil {
 		return nil, err
 	}
-	reg := s.registryFor(req.RegistryType)
+	reg, err := s.registryFor(req.RegistryType)
+	if err != nil {
+		return nil, err
+	}
 	return reg.ListVersions(ctx, registry.VersionsRequest{
 		Namespace: req.Namespace, Name: req.Name, System: req.System,
 	})
@@ -43,6 +53,16 @@ func (s *Server) GetSubmodule(ctx context.Context, req Request, subpath string) 
 // ListSubmodules returns the paths of first-level submodules under
 // modules/ within the fetched module.
 func (s *Server) ListSubmodules(ctx context.Context, req Request) ([]string, error) {
+	if req.Source != "" {
+		if err := validateSourceRequest(req); err != nil {
+			return nil, err
+		}
+		dir, err := s.fetchSource(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return listSubmoduleDirs(dir)
+	}
 	req, err := s.resolveRequest(ctx, req)
 	if err != nil {
 		return nil, err
@@ -87,13 +107,22 @@ func (s *Server) GetProviderRequirements(ctx context.Context, req Request) (map[
 // getModule is the shared implementation for root/submodule retrieval.
 // subpath == "" means the root module.
 func (s *Server) getModule(ctx context.Context, req Request, subpath string) (*Module, error) {
+	if req.Source != "" {
+		return s.getModuleFromSource(ctx, req, subpath)
+	}
 	req, err := s.resolveRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	host, err := s.registryHostFor(req.RegistryType)
 	if err != nil {
 		return nil, err
 	}
 
 	key := moduleKey{
 		registry: req.RegistryType,
+		host:     host,
 		ns:       req.Namespace, name: req.Name, system: req.System,
 		version: req.Version, subpath: subpath,
 	}
@@ -126,6 +155,72 @@ func (s *Server) getModule(ctx context.Context, req Request, subpath string) (*M
 	return m, nil
 }
 
+// getModuleFromSource is the Source-mode counterpart to getModule. It
+// skips registry resolution, fetches directly via go-getter (or reads
+// in place for local paths), and keys the in-memory cache by the raw
+// source URL plus subpath.
+func (s *Server) getModuleFromSource(ctx context.Context, req Request, subpath string) (*Module, error) {
+	if err := validateSourceRequest(req); err != nil {
+		return nil, err
+	}
+
+	key := moduleKey{
+		registry: "source",
+		source:   req.Source,
+		subpath:  subpath,
+	}
+
+	// For LOCAL sources we deliberately bypass the in-memory module
+	// cache: the files on disk are the source of truth and callers
+	// expect edits to be picked up on the next call. Remote sources
+	// are content-addressed by their URL (which should pin a ref)
+	// and are therefore safe to memoise.
+	local := isLocalSource(req.Source)
+	if !local {
+		s.mu.RLock()
+		if m, ok := s.moduleCache[key]; ok {
+			s.mu.RUnlock()
+			return m, nil
+		}
+		s.mu.RUnlock()
+	}
+
+	dir, err := s.fetchSource(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	target, err := resolveSubmodulePath(dir, subpath)
+	if err != nil {
+		return nil, err
+	}
+
+	m, err := inspectDir(target, subpath)
+	if err != nil {
+		return nil, fmt.Errorf("inspecting module %q: %w", target, err)
+	}
+
+	if !local {
+		s.mu.Lock()
+		s.moduleCache[key] = m
+		s.mu.Unlock()
+	}
+	return m, nil
+}
+
+// validateSourceRequest enforces the Source-mode invariants: no
+// version constraint may be supplied because there is no registry to
+// resolve it against.
+func validateSourceRequest(req Request) error {
+	if req.Version == "" {
+		return nil
+	}
+	if _, err := goversion.NewVersion(req.Version); err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w (got %q)", ErrSourceWithConstraint, req.Version)
+}
+
 // resolveRequest validates req and resolves a concrete version, mutating
 // a copy of req.
 func (s *Server) resolveRequest(ctx context.Context, req Request) (Request, error) {
@@ -133,7 +228,10 @@ func (s *Server) resolveRequest(ctx context.Context, req Request) (Request, erro
 	if err != nil {
 		return req, err
 	}
-	reg := s.registryFor(req.RegistryType)
+	reg, err := s.registryFor(req.RegistryType)
+	if err != nil {
+		return req, err
+	}
 	resolved, err := resolveVersion(ctx, reg, registry.VersionsRequest{
 		Namespace: req.Namespace, Name: req.Name, System: req.System,
 	}, req.Version)

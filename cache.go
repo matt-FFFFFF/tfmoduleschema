@@ -1,6 +1,8 @@
 package tfmoduleschema
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,8 +41,14 @@ func (c CacheStatus) String() string {
 
 // CacheStatusFunc is invoked by the Server after resolving a module
 // request to report whether the module was found in the local cache
-// (CacheStatusHit) or a download was attempted (CacheStatusMiss). The
-// request passed in has a concrete (fixed) version.
+// (CacheStatusHit) or a download was attempted (CacheStatusMiss).
+//
+// For classic registry requests the request passed in has a concrete
+// (fixed) version. For Source-mode requests (request.Source != "")
+// the Version field holds whatever the caller supplied — which may
+// be empty or a raw ref embedded in the go-getter URL — because
+// there is no registry to resolve a constraint against. Callbacks
+// that need a concrete version should branch on request.Source.
 type CacheStatusFunc func(request Request, status CacheStatus)
 
 // ServerOption configures a Server at construction time.
@@ -110,20 +118,49 @@ func cachePathSegment(value string) string {
 // normalizedRegistryType maps empty/unknown RegistryTypes to
 // RegistryTypeOpenTofu so the cache layout is stable.
 func normalizedRegistryType(r RegistryType) RegistryType {
-	if r == RegistryTypeTerraform {
-		return RegistryTypeTerraform
+	switch r {
+	case RegistryTypeTerraform, RegistryTypeCustom:
+		return r
 	}
 	return RegistryTypeOpenTofu
+}
+
+// sanitizeHost returns a filesystem-safe cache segment for a registry
+// host. Hosts are lowercased (DNS is case-insensitive) so variations
+// like "Host" and "host" share the same cache entry, then passed
+// through cachePathSegment to strip any characters unsafe on disk
+// (notably the ':' in host:port, which becomes '_').
+func sanitizeHost(host string) string {
+	return cachePathSegment(strings.ToLower(host))
 }
 
 // cacheModuleDir returns the cache directory for a given module request.
 // The request version must be a concrete version.
 //
+// For the two public registries the layout is:
+//
 //	<cacheDir>/<registry>/<namespace>/<name>/<system>/<version>/
-func cacheModuleDir(cacheDir string, req Request) string {
+//
+// For custom registries the host is included so distinct custom
+// registries cannot collide:
+//
+//	<cacheDir>/custom/<host>/<namespace>/<name>/<system>/<version>/
+//
+// The host passed in should be the original input host (from
+// --registry-url or WithCustomRegistry), not the service-discovery
+// resolved host, so that edits to the configured registry reliably
+// invalidate the cache.
+func cacheModuleDir(cacheDir string, req Request, host string) string {
+	reg := normalizedRegistryType(req.RegistryType)
+	base := filepath.Join(cacheDir, cachePathSegment(string(reg)))
+	if reg == RegistryTypeCustom {
+		if host == "" {
+			host = "default"
+		}
+		base = filepath.Join(base, sanitizeHost(host))
+	}
 	return filepath.Join(
-		cacheDir,
-		cachePathSegment(string(normalizedRegistryType(req.RegistryType))),
+		base,
 		cachePathSegment(req.Namespace),
 		cachePathSegment(req.Name),
 		cachePathSegment(req.System),
@@ -139,4 +176,18 @@ func cacheDirExistsNonEmpty(dir string) bool {
 		return false
 	}
 	return len(entries) > 0
+}
+
+// cacheSourceDir returns the cache directory for a raw go-getter source
+// URL. The source string is hashed so any URL shape can be stored
+// deterministically:
+//
+//	<cacheDir>/source/<hex-sha256(source)[:16]>/
+//
+// The suffix is the first 16 hex characters (8 bytes / 64 bits) of the
+// SHA-256 digest of the source string — enough to avoid collisions in
+// practice without producing unwieldy path segments.
+func cacheSourceDir(cacheDir, source string) string {
+	sum := sha256.Sum256([]byte(source))
+	return filepath.Join(cacheDir, "source", hex.EncodeToString(sum[:])[:16])
 }

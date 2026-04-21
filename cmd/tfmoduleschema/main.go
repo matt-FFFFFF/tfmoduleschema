@@ -12,9 +12,11 @@ import (
 	"sort"
 	"strings"
 
+	goversion "github.com/hashicorp/go-version"
 	cli "github.com/urfave/cli/v3"
 
 	"github.com/matt-FFFFFF/tfmoduleschema"
+	"github.com/matt-FFFFFF/tfmoduleschema/registry"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -35,27 +37,24 @@ func buildRootCommand() *cli.Command {
 		Version: version,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:     "namespace",
-				Aliases:  []string{"ns"},
-				Usage:    "Module namespace (e.g. Azure, terraform-aws-modules)",
-				Required: true,
+				Name:    "namespace",
+				Aliases: []string{"ns"},
+				Usage:   "Module namespace (e.g. Azure, terraform-aws-modules). Required unless --source is set",
 			},
 			&cli.StringFlag{
-				Name:     "name",
-				Aliases:  []string{"n"},
-				Usage:    "Module name (e.g. avm-res-compute-virtualmachine, vpc)",
-				Required: true,
+				Name:    "name",
+				Aliases: []string{"n"},
+				Usage:   "Module name (e.g. avm-res-compute-virtualmachine, vpc). Required unless --source is set",
 			},
 			&cli.StringFlag{
-				Name:     "system",
-				Aliases:  []string{"s"},
-				Usage:    "Module target system (e.g. aws, azurerm). Called \"provider\" in the Hashi API",
-				Required: true,
+				Name:    "system",
+				Aliases: []string{"s"},
+				Usage:   "Module target system (e.g. aws, azurerm). Called \"provider\" in the Hashi API. Required unless --source is set",
 			},
 			&cli.StringFlag{
 				Name:    "version-constraint",
 				Aliases: []string{"vc"},
-				Usage:   "Version or constraint (e.g. 1.2.3, ~> 1.2). Empty for latest",
+				Usage:   "Version or constraint (e.g. 1.2.3, ~> 1.2). Empty for latest. Must be a concrete version when --source is set",
 			},
 			&cli.StringFlag{
 				Name:    "submodule",
@@ -63,10 +62,23 @@ func buildRootCommand() *cli.Command {
 				Usage:   "Target a submodule by path (e.g. modules/network) instead of the root module",
 			},
 			&cli.StringFlag{
+				Name:    "source",
+				Usage:   "Local path or go-getter source (e.g. ./mymod, git::https://...). Mutually exclusive with --namespace/--name/--system",
+			},
+			&cli.StringFlag{
 				Name:    "registry",
 				Aliases: []string{"r"},
-				Usage:   "Registry type: opentofu (default) or terraform",
+				Usage:   "Registry type: opentofu (default), terraform, or custom",
 				Value:   "opentofu",
+			},
+			&cli.StringFlag{
+				Name:  "registry-url",
+				Usage: "Custom registry host or base URL (implies --registry=custom). Host-only input triggers Terraform remote service discovery",
+			},
+			&cli.StringFlag{
+				Name:    "registry-token",
+				Usage:   "Bearer token for the custom registry (overrides TF_TOKEN_<host> and credentials.tfrc.json)",
+				Sources: cli.EnvVars("TFMODULESCHEMA_REGISTRY_TOKEN"),
 			},
 			&cli.StringFlag{
 				Name:    "cache-dir",
@@ -87,14 +99,16 @@ func buildRootCommand() *cli.Command {
 	}
 }
 
-// requestFromCmd builds a Request from the global CLI flags.
+// requestFromCmd builds a Request from the global CLI flags. It does
+// NOT validate flag combinations; call validateRequestFlags first.
 func requestFromCmd(cmd *cli.Command) tfmoduleschema.Request {
 	return tfmoduleschema.Request{
 		Namespace:    cmd.String("namespace"),
 		Name:         cmd.String("name"),
 		System:       cmd.String("system"),
 		Version:      cmd.String("version-constraint"),
-		RegistryType: registryTypeFromString(cmd.String("registry")),
+		Source:       cmd.String("source"),
+		RegistryType: registryTypeFromCmd(cmd),
 	}
 }
 
@@ -103,17 +117,113 @@ func versionsRequestFromCmd(cmd *cli.Command) tfmoduleschema.VersionsRequest {
 		Namespace:    cmd.String("namespace"),
 		Name:         cmd.String("name"),
 		System:       cmd.String("system"),
-		RegistryType: registryTypeFromString(cmd.String("registry")),
+		RegistryType: registryTypeFromCmd(cmd),
 	}
+}
+
+// registryTypeFromCmd returns the effective registry type, honouring
+// the implicit "--registry-url forces custom" rule.
+func registryTypeFromCmd(cmd *cli.Command) tfmoduleschema.RegistryType {
+	if strings.TrimSpace(cmd.String("registry-url")) != "" {
+		return tfmoduleschema.RegistryTypeCustom
+	}
+	return registryTypeFromString(cmd.String("registry"))
 }
 
 func registryTypeFromString(s string) tfmoduleschema.RegistryType {
 	switch strings.ToLower(s) {
 	case "terraform":
 		return tfmoduleschema.RegistryTypeTerraform
+	case "custom":
+		return tfmoduleschema.RegistryTypeCustom
 	default:
 		return tfmoduleschema.RegistryTypeOpenTofu
 	}
+}
+
+// validateRequestFlags enforces flag-combination rules that would
+// otherwise manifest as confusing downstream errors. It must be called
+// before dispatching a Request or a VersionsRequest.
+//
+// Rules:
+//   - --source is mutually exclusive with --namespace, --name, --system,
+//     --registry-url, and --registry-token.
+//   - When --source is not set, all three of --namespace/--name/--system
+//     are required (mirroring the old Required:true behaviour, now
+//     enforced in code so --source can opt out).
+//   - When --registry=custom is selected (explicitly or via
+//     --registry-url), --registry-url must be supplied unless --source
+//     is set, and its value must be a syntactically valid
+//     custom-registry input so that WithCustomRegistry does not panic.
+func validateRequestFlags(cmd *cli.Command) error {
+	source := strings.TrimSpace(cmd.String("source"))
+	ns := strings.TrimSpace(cmd.String("namespace"))
+	name := strings.TrimSpace(cmd.String("name"))
+	sys := strings.TrimSpace(cmd.String("system"))
+	regURL := strings.TrimSpace(cmd.String("registry-url"))
+	regTok := strings.TrimSpace(cmd.String("registry-token"))
+	version := strings.TrimSpace(cmd.String("version-constraint"))
+
+	if source != "" {
+		if ns != "" || name != "" || sys != "" {
+			return fmt.Errorf("--source is mutually exclusive with --namespace/--name/--system")
+		}
+		if regURL != "" || regTok != "" {
+			return fmt.Errorf("--source is mutually exclusive with --registry-url/--registry-token")
+		}
+		// Source mode has no registry to resolve a constraint
+		// against, so --version-constraint must either be empty or
+		// a concrete version (e.g. "1.2.3"), not a range like ">=
+		// 1.0". Catching this here turns a confusing server-side
+		// error into an immediate CLI validation failure.
+		if version != "" {
+			if _, err := goversion.NewVersion(version); err != nil {
+				return fmt.Errorf("--source requires --version-constraint to be empty or a concrete version (got %q)", version)
+			}
+		}
+		return nil
+	}
+	// No source: classic registry path.
+	var missing []string
+	if ns == "" {
+		missing = append(missing, "--namespace")
+	}
+	if name == "" {
+		missing = append(missing, "--name")
+	}
+	if sys == "" {
+		missing = append(missing, "--system")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required flag(s) missing: %s", strings.Join(missing, ", "))
+	}
+	// Classic registry path: --registry=custom must have a URL. This
+	// catches `--registry custom` without `--registry-url`, which
+	// would otherwise fail much later with "no custom registry
+	// configured" from the server.
+	if registryTypeFromCmd(cmd) == tfmoduleschema.RegistryTypeCustom && regURL == "" {
+		return fmt.Errorf("--registry=custom requires --registry-url")
+	}
+	// Pre-validate --registry-url shape so newServer's call to
+	// WithCustomRegistry (which panics on malformed input) never
+	// trips on user-supplied strings. Callers reach newServer through
+	// multiple dispatch paths; catching the error here keeps CLI
+	// failures as normal non-zero-exit messages.
+	if regURL != "" {
+		if _, _, err := registry.DiscoverModulesEndpointInputCheck(regURL); err != nil {
+			return fmt.Errorf("invalid --registry-url %q: %w", regURL, err)
+		}
+	}
+	// --registry-token (from flag or TFMODULESCHEMA_REGISTRY_TOKEN)
+	// is only applied when a custom registry is configured via
+	// --registry-url. Silently dropping it would be a security
+	// footgun: a user who thinks they're sending a bearer token to
+	// a public registry could be surprised later when the token
+	// turns out to be unused. Fail fast instead.
+	if regTok != "" && regURL == "" {
+		return fmt.Errorf("--registry-token (or TFMODULESCHEMA_REGISTRY_TOKEN) requires --registry-url")
+	}
+	return nil
 }
 
 // submoduleFromCmd returns the cleaned submodule path from --submodule,
@@ -158,6 +268,9 @@ func hasWindowsVolume(p string) bool {
 // loadModule fetches either the root module or the submodule designated
 // by --submodule, depending on whether the flag is set.
 func loadModule(ctx context.Context, s *tfmoduleschema.Server, cmd *cli.Command) (*tfmoduleschema.Module, error) {
+	if err := validateRequestFlags(cmd); err != nil {
+		return nil, err
+	}
 	sub, err := submoduleFromCmd(cmd)
 	if err != nil {
 		return nil, err
@@ -168,24 +281,48 @@ func loadModule(ctx context.Context, s *tfmoduleschema.Server, cmd *cli.Command)
 	return s.GetSubmodule(ctx, requestFromCmd(cmd), sub)
 }
 
-func newServer(cmd *cli.Command) *tfmoduleschema.Server {
+func newServer(cmd *cli.Command) (*tfmoduleschema.Server, error) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	opts := []tfmoduleschema.ServerOption{
 		tfmoduleschema.WithCacheDir(cmd.String("cache-dir")),
 		tfmoduleschema.WithForceFetch(cmd.Bool("force-fetch")),
 	}
+	if url := strings.TrimSpace(cmd.String("registry-url")); url != "" {
+		// Pre-validate so WithCustomRegistry (which panics on
+		// malformed input) can't crash the CLI from user input. The
+		// same check is also performed in validateRequestFlags for
+		// early error reporting, but newServer is reached through
+		// multiple paths; this is the final backstop.
+		if _, _, err := registry.DiscoverModulesEndpointInputCheck(url); err != nil {
+			return nil, fmt.Errorf("invalid --registry-url %q: %w", url, err)
+		}
+		var regOpts []registry.Option
+		if tok := strings.TrimSpace(cmd.String("registry-token")); tok != "" {
+			regOpts = append(regOpts, registry.WithBearerToken(tok))
+		}
+		opts = append(opts, tfmoduleschema.WithCustomRegistry(url, regOpts...))
+	}
 	if !cmd.Bool("quiet") {
 		opts = append(opts, tfmoduleschema.WithCacheStatusFunc(func(req tfmoduleschema.Request, status tfmoduleschema.CacheStatus) {
 			switch status {
 			case tfmoduleschema.CacheStatusHit:
-				fmt.Fprintf(os.Stderr, "cache hit: %s/%s/%s %s\n", req.Namespace, req.Name, req.System, req.Version)
+				fmt.Fprintf(os.Stderr, "cache hit: %s\n", cacheLabel(req))
 			case tfmoduleschema.CacheStatusMiss:
-				fmt.Fprintf(os.Stderr, "downloading: %s/%s/%s %s\n", req.Namespace, req.Name, req.System, req.Version)
+				fmt.Fprintf(os.Stderr, "downloading: %s\n", cacheLabel(req))
 			}
 		}))
 	}
-	return tfmoduleschema.NewServer(logger, opts...)
+	return tfmoduleschema.NewServer(logger, opts...), nil
+}
+
+// cacheLabel produces a human label for a Request, preferring Source
+// when set so --source users don't see empty namespace/name fields.
+func cacheLabel(req tfmoduleschema.Request) string {
+	if req.Source != "" {
+		return req.Source
+	}
+	return fmt.Sprintf("%s/%s/%s %s", req.Namespace, req.Name, req.System, req.Version)
 }
 
 func printJSON(v any) error {
@@ -210,7 +347,10 @@ func moduleCommand() *cli.Command {
 			Name:  "schema",
 			Usage: "Print the full parsed module as JSON",
 			Action: func(ctx context.Context, cmd *cli.Command) error {
-				s := newServer(cmd)
+				s, err := newServer(cmd)
+				if err != nil {
+					return err
+				}
 				defer s.Cleanup()
 				m, err := loadModule(ctx, s, cmd)
 				if err != nil {
@@ -233,7 +373,10 @@ func variableCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List variable names",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -252,7 +395,10 @@ func variableCommand() *cli.Command {
 				Usage:     "Print full schema for one variable, or all when no name given",
 				ArgsUsage: "[variable-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -285,7 +431,10 @@ func outputCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List output names",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -304,7 +453,10 @@ func outputCommand() *cli.Command {
 				Usage:     "Print full schema for one output, or all when no name given",
 				ArgsUsage: "[output-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -337,7 +489,10 @@ func providerCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List required provider names",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -357,7 +512,10 @@ func providerCommand() *cli.Command {
 				Usage:     "Print requirement for one provider, or the full map when no name given",
 				ArgsUsage: "[provider-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -388,16 +546,22 @@ func submoduleCommand() *cli.Command {
 			{
 				Name:  "list",
 				Usage: "List submodule paths",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
-					defer s.Cleanup()
-					subs, err := s.ListSubmodules(ctx, requestFromCmd(cmd))
-					if err != nil {
-						return err
-					}
-					printList(subs)
-					return nil
-				},
+			Action: func(ctx context.Context, cmd *cli.Command) error {
+				if err := validateRequestFlags(cmd); err != nil {
+					return err
+				}
+				s, err := newServer(cmd)
+				if err != nil {
+					return err
+				}
+				defer s.Cleanup()
+				subs, err := s.ListSubmodules(ctx, requestFromCmd(cmd))
+				if err != nil {
+					return err
+				}
+				printList(subs)
+				return nil
+			},
 			},
 		},
 	}
@@ -413,7 +577,16 @@ func versionCommand() *cli.Command {
 			Name:  "list",
 			Usage: "List all versions the registry advertises",
 			Action: func(ctx context.Context, cmd *cli.Command) error {
-				s := newServer(cmd)
+				if strings.TrimSpace(cmd.String("source")) != "" {
+					return fmt.Errorf("version list is not supported with --source: pin a concrete version in the source URL instead")
+				}
+				if err := validateRequestFlags(cmd); err != nil {
+					return err
+				}
+				s, err := newServer(cmd)
+				if err != nil {
+					return err
+				}
 				defer s.Cleanup()
 				vs, err := s.GetAvailableVersions(ctx, versionsRequestFromCmd(cmd))
 				if err != nil {

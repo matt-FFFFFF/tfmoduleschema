@@ -160,7 +160,7 @@ func TestServer_ForceFetch_RefetchesModifiedCache(t *testing.T) {
 		Namespace: "n", Name: "m", System: "s", Version: "1.0.0",
 		RegistryType: RegistryTypeOpenTofu,
 	}
-	modDir := cacheModuleDir(cacheDir, concreteReq)
+	modDir := cacheModuleDir(cacheDir, concreteReq, "")
 
 	// Populate the cache without force-fetch.
 	s1 := NewServer(nil,

@@ -1,0 +1,305 @@
+package registry
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestBearerTransport_InjectsOnMatchingHost verifies that the
+// Authorization header is added only on requests whose URL host
+// matches the configured registry host.
+func TestBearerTransport_InjectsOnMatchingHost(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[{"version":"1.0.0"}]}]}`))
+	}))
+	defer srv.Close()
+
+	u, _ := url.Parse(srv.URL)
+	c, err := NewCustom(srv.URL+"/v1/modules", WithBearerToken("sekrit"))
+	require.NoError(t, err)
+	assert.Equal(t, u.Host, c.Host())
+
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer sekrit", gotAuth)
+}
+
+// TestBearerTransport_EmptyTokenIsNoOp: installing the option with an
+// empty token must not send an Authorization header.
+func TestBearerTransport_EmptyTokenIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[]}]}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewCustom(srv.URL+"/v1/modules", WithBearerToken(""))
+	require.NoError(t, err)
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, gotAuth)
+}
+
+// TestBearerTransport_StripsOnCrossHostRedirect verifies the token is
+// NOT forwarded when the registry redirects to a different host (e.g.
+// a signed S3 URL). This is the critical security property.
+func TestBearerTransport_StripsOnCrossHostRedirect(t *testing.T) {
+	t.Parallel()
+
+	// Second server represents an unrelated host (e.g. object storage).
+	var redirectAuth string
+	storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[]}]}`))
+	}))
+	defer storage.Close()
+
+	// Registry redirects every request to the storage server.
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, storage.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer registry.Close()
+
+	c, err := NewCustom(registry.URL+"/v1/modules", WithBearerToken("sekrit"))
+	require.NoError(t, err)
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, redirectAuth, "token must NOT be forwarded to a different host")
+}
+
+// TestBearerTransport_WrapsExistingClient: a caller-supplied
+// http.Client must still have its Transport invoked (e.g. for custom
+// TLS config) — we wrap it, not replace it.
+func TestBearerTransport_WrapsExistingClient(t *testing.T) {
+	t.Parallel()
+
+	var authSeen, markerSeen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authSeen = r.Header.Get("Authorization")
+		markerSeen = r.Header.Get("X-Marker")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[]}]}`))
+	}))
+	defer srv.Close()
+
+	base := &http.Client{Transport: &markerTransport{wrapped: http.DefaultTransport}}
+	c, err := NewCustom(srv.URL+"/v1/modules",
+		WithHTTPClient(base),
+		WithBearerToken("sekrit"),
+	)
+	require.NoError(t, err)
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer sekrit", authSeen)
+	assert.Equal(t, "yes", markerSeen, "caller transport must still run")
+}
+
+// markerTransport is a trivial RoundTripper used above to prove the
+// caller's transport chain is preserved when a bearer token is
+// installed.
+type markerTransport struct{ wrapped http.RoundTripper }
+
+func (m *markerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("X-Marker", "yes")
+	if m.wrapped == nil {
+		return http.DefaultTransport.RoundTrip(req)
+	}
+	return m.wrapped.RoundTrip(req)
+}
+
+// TestBearerTransport_SendsOnRedirectBackToSameHost: if a redirect
+// stays on the same host, the Authorization header should be
+// re-injected (the transport runs on every hop).
+func TestBearerTransport_SendsOnRedirectBackToSameHost(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	var secondAuth string
+	mux.HandleFunc("/v1/modules/n/m/s/versions", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/v1/modules/n/m/s/versions/alt", http.StatusFound)
+	})
+	mux.HandleFunc("/v1/modules/n/m/s/versions/alt", func(w http.ResponseWriter, r *http.Request) {
+		secondAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// httptest servers listen on 127.0.0.1 so same-host redirects work.
+	// Confirm.
+	assert.True(t, strings.HasPrefix(srv.URL, "http://127.0.0.1:") || strings.HasPrefix(srv.URL, "http://[::1]:"))
+
+	c, err := NewCustom(srv.URL+"/v1/modules", WithBearerToken("sekrit"))
+	require.NoError(t, err)
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer sekrit", secondAuth, "same-host redirect must still carry the bearer")
+}
+
+// TestBearerTransport_WithBearerHost_Override: WithBearerHost overrides
+// the fall-back host so the token is only injected on requests whose
+// URL host matches the override. Requests to the registry's own base
+// URL host (which does NOT match the override) must not carry the
+// Authorization header. This is the behaviour LazyCustom relies on
+// when service discovery returns a modules.v1 URL on a different host
+// than the user-configured input: the token should follow the user's
+// expectation (the input host), not accidentally leak to the
+// discovered host.
+func TestBearerTransport_WithBearerHost_Override(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/modules/n/m/s/versions", func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Scope the bearer to a host that is NOT the server's host. The
+	// request goes to srv, so the token must be stripped.
+	c, err := NewCustom(srv.URL+"/v1/modules",
+		WithBearerToken("sekrit"),
+		WithBearerHost("other.invalid"),
+	)
+	require.NoError(t, err)
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, gotAuth, "bearer host override must suppress injection on non-matching hosts")
+}
+
+// TestBearerTransport_WithBearerHost_Matches: WithBearerHost also
+// works affirmatively — when the override matches the request host,
+// the token is injected.
+func TestBearerTransport_WithBearerHost_Matches(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/modules/n/m/s/versions", func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	srvHost := strings.TrimPrefix(srv.URL, "http://")
+	c, err := NewCustom(srv.URL+"/v1/modules",
+		WithBearerToken("sekrit"),
+		WithBearerHost(srvHost),
+	)
+	require.NoError(t, err)
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer sekrit", gotAuth)
+}
+
+// TestHostsMatch_DefaultPortNormalization verifies that bearer-host
+// comparison treats an omitted port as the scheme's default port on
+// exactly one side. When both sides carry a port (or neither does),
+// comparison is exact.
+func TestHostsMatch_DefaultPortNormalization(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		scheme string
+		req    string
+		cfg    string
+		want   bool
+	}{
+		{"exact match, no port", "https", "reg.example.com", "reg.example.com", true},
+		{"exact match, both port", "https", "reg.example.com:8443", "reg.example.com:8443", true},
+		{"req has default https port, cfg does not", "https", "reg.example.com:443", "reg.example.com", true},
+		{"cfg has default https port, req does not", "https", "reg.example.com", "reg.example.com:443", true},
+		{"req has default http port, cfg does not", "http", "reg.example.com:80", "reg.example.com", true},
+		{"cfg has default http port, req does not", "http", "reg.example.com", "reg.example.com:80", true},
+		{"different non-default ports do NOT match", "https", "reg.example.com:8443", "reg.example.com:9443", false},
+		{"one side non-default port, other none, does NOT match", "https", "reg.example.com:8443", "reg.example.com", false},
+		{"different hosts never match", "https", "a.example.com", "b.example.com", false},
+		{"case-insensitive host match", "https", "REG.Example.COM", "reg.example.com", true},
+		{"IPv6 literal exact", "https", "[::1]:8443", "[::1]:8443", true},
+		{"IPv6 literal different port", "https", "[::1]:8443", "[::1]:9443", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hostsMatch(tc.scheme, tc.req, tc.cfg)
+			assert.Equal(t, tc.want, got, "hostsMatch(%q,%q,%q)", tc.scheme, tc.req, tc.cfg)
+		})
+	}
+}
+
+// TestLazyCustom_CallerBearerHostOverride verifies that a caller-
+// supplied WithBearerHost wins over the input-host default that
+// LazyCustom.resolve installs internally. Without this, users who
+// explicitly scope a token to a different host (e.g. a discovery
+// endpoint served from a CDN) would find their override silently
+// discarded.
+func TestLazyCustom_CallerBearerHostOverride(t *testing.T) {
+	t.Parallel()
+
+	// The "registry" server records whether it received an
+	// Authorization header, so we can assert scoping behaviour.
+	var gotAuth string
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[{"version":"1.0.0"}]}]}`))
+	}))
+	defer regSrv.Close()
+
+	// Use a full-URL input so discovery is bypassed. parseInputHost
+	// still reports the input host for bearer-scope defaults.
+	// Caller explicitly scopes the bearer to a DIFFERENT host;
+	// that explicit option must win over LazyCustom's input-host
+	// default so the token is NOT sent to the registry host.
+	l := NewLazyCustom(
+		regSrv.URL+"/v1/modules",
+		regSrv.Client(),
+		WithBearerToken("sekrit"),
+		WithBearerHost("unreachable.example.test"),
+	)
+	_, err := l.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	// The caller's override does not match the registry host, so
+	// the Authorization header should NOT have been sent.
+	assert.Empty(t, gotAuth, "caller WithBearerHost override must win over LazyCustom default")
+}

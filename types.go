@@ -13,12 +13,17 @@ const (
 	// RegistryTypeTerraform is the HashiCorp Terraform public registry
 	// (registry.terraform.io).
 	RegistryTypeTerraform RegistryType = "terraform"
+	// RegistryTypeCustom is a user-configured module registry (a
+	// private registry, mirror, or self-hosted instance). A custom
+	// registry must be installed on the Server via WithCustomRegistry
+	// before it can be used in a Request.
+	RegistryTypeCustom RegistryType = "custom"
 )
 
 // Valid reports whether the RegistryType is one of the known values.
 func (r RegistryType) Valid() bool {
 	switch r {
-	case RegistryTypeOpenTofu, RegistryTypeTerraform:
+	case RegistryTypeOpenTofu, RegistryTypeTerraform, RegistryTypeCustom:
 		return true
 	}
 	return false
@@ -39,6 +44,25 @@ type Request struct {
 	// RegistryType selects the registry. An empty value defaults to
 	// RegistryTypeOpenTofu.
 	RegistryType RegistryType `json:"registry_type,omitempty"`
+	// Source, when non-empty, is a go-getter source URL used to fetch
+	// the module directly, bypassing the registry. Examples:
+	//
+	//	/abs/path/to/module
+	//	./relative/path
+	//	file:///abs/path
+	//	git::https://github.com/org/repo.git//modules/foo?ref=v1.2.3
+	//	s3::https://s3.amazonaws.com/bucket/module.zip
+	//
+	// When Source is set, Namespace, Name, System, RegistryType and
+	// Version are ignored for download purposes. The in-memory and
+	// on-disk caches are keyed only by the Source string (and the
+	// subpath for submodule lookups); the other fields do not
+	// participate in cache key derivation. Version must be empty or a
+	// concrete version — constraint expressions are rejected because
+	// there is no registry to resolve them against. Local paths
+	// (absolute, "./", "../", ".", "..", or "file://") are inspected
+	// in place and are not copied into the cache.
+	Source string `json:"source,omitempty"`
 }
 
 // VersionsRequest identifies a module for listing versions. It is the same
