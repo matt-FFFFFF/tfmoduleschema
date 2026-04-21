@@ -103,10 +103,12 @@ func encodeHostForEnv(host string) string {
 
 // splitHostPort returns (host, port, true) when host contains a port,
 // otherwise ("", "", false). Does not validate port digits — callers
-// have already parsed the input upstream.
+// have already parsed the input upstream. Inputs with an empty host
+// portion (e.g. ":8443") are rejected so they don't collapse onto
+// the empty-host TF_TOKEN_ key.
 func splitHostPort(host string) (string, string, bool) {
 	i := strings.LastIndex(host, ":")
-	if i < 0 || i == len(host)-1 {
+	if i <= 0 || i == len(host)-1 {
 		return "", "", false
 	}
 	// Reject IPv6-literal style "[::1]:443" — our hosts are

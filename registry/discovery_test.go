@@ -201,6 +201,28 @@ func TestDiscoverModulesEndpoint_RejectsGarbage(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestParseInputHost_RejectsMalformedHost rejects bare-host inputs
+// that contain characters which would turn them into something other
+// than a bare host[:port] (userinfo, fragment, tab, etc.). Without
+// these checks, parseInputHost would otherwise construct a malformed
+// discovery URL and fail late in fetchDiscovery with a confusing
+// error.
+func TestParseInputHost_RejectsMalformedHost(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"user@registry.example.com",
+		"registry.example.com#frag",
+		"registry.example.com?x=1",
+		"has\ttab",
+		":8443",
+	}
+	for _, in := range cases {
+		_, _, err := parseInputHost(in)
+		require.Error(t, err, in)
+		assert.ErrorIs(t, err, ErrDiscoveryFailed, in)
+	}
+}
+
 // TestParseInputHost_RejectsNonHTTPSchemes ensures only http/https
 // URLs are accepted. Other schemes (ftp, file, etc.) are rejected so
 // they can't slip through the full-URL-with-path bypass and reach a

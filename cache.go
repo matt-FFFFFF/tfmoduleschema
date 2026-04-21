@@ -176,7 +176,11 @@ func cacheDirExistsNonEmpty(dir string) bool {
 // URL. The source string is hashed so any URL shape can be stored
 // deterministically:
 //
-//	<cacheDir>/source/<sha256(source)[:16]>/
+//	<cacheDir>/source/<hex-sha256(source)[:16]>/
+//
+// The suffix is the first 16 hex characters (8 bytes / 64 bits) of the
+// SHA-256 digest of the source string — enough to avoid collisions in
+// practice without producing unwieldy path segments.
 func cacheSourceDir(cacheDir, source string) string {
 	sum := sha256.Sum256([]byte(source))
 	return filepath.Join(cacheDir, "source", hex.EncodeToString(sum[:])[:16])

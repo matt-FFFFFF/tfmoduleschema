@@ -105,8 +105,19 @@ func parseInputHost(input string) (bypass, host string, err error) {
 	if h == "" {
 		return "", "", fmt.Errorf("%w: empty host", ErrDiscoveryFailed)
 	}
-	if strings.ContainsAny(h, "/? ") {
+	// Reject any character that would make this something other than a
+	// bare host[:port]: path, query, fragment, userinfo, whitespace,
+	// or scheme separators.
+	if strings.ContainsAny(h, "/? \t#@") {
 		return "", "", fmt.Errorf("%w: %q is not a host", ErrDiscoveryFailed, h)
+	}
+	// Round-trip through url.Parse to catch subtler malformations and
+	// confirm the parser sees the same host we do.
+	parsed, perr := url.Parse("https://" + h)
+	if perr != nil || parsed.User != nil ||
+		parsed.Host != h || parsed.RawQuery != "" ||
+		parsed.Fragment != "" || parsed.Hostname() == "" {
+		return "", "", fmt.Errorf("%w: %q is not a valid host", ErrDiscoveryFailed, h)
 	}
 	return "", h, nil
 }

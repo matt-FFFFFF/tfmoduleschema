@@ -197,3 +197,26 @@ func withIsolatedTokenEnv(t *testing.T) {
 	t.Setenv("APPDATA", "")
 	t.Setenv("HOME", t.TempDir())
 }
+
+func TestSplitHostPort(t *testing.T) {
+	cases := []struct {
+		in      string
+		okWant  bool
+		hWant   string
+		pWant   string
+	}{
+		{"example.com:8443", true, "example.com", "8443"},
+		{"example.com", false, "", ""},
+		{":8443", false, "", ""},           // empty host rejected
+		{"example.com:", false, "", ""},    // empty port rejected
+		{"[::1]:443", false, "", ""},       // IPv6 literal unsupported
+		{"", false, "", ""},
+	}
+	for _, tc := range cases {
+		h, p, ok := splitHostPort(tc.in)
+		if ok != tc.okWant || h != tc.hWant || p != tc.pWant {
+			t.Errorf("splitHostPort(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				tc.in, h, p, ok, tc.hWant, tc.pWant, tc.okWant)
+		}
+	}
+}

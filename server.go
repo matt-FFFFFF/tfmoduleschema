@@ -103,6 +103,12 @@ func WithRegistry(t RegistryType, r registry.Registry) ServerOption {
 // keying and credential lookup, so switching --registry-url reliably
 // invalidates the cache even if two hosts publish the same modules.v1
 // base.
+//
+// WithCustomRegistry panics if the input is syntactically malformed
+// (empty, contains whitespace, has an unsupported scheme, etc.). This
+// is a programmer error caught at option-application time rather than
+// at first request. Callers accepting untrusted input should validate
+// via registry.DiscoverModulesEndpointInputCheck first.
 func WithCustomRegistry(input string, opts ...registry.Option) ServerOption {
 	return func(s *Server) {
 		// Validate the input shape up front so obvious programmer
@@ -299,8 +305,11 @@ func (s *Server) fireCacheStatus(req Request, status CacheStatus) {
 // fetchSource resolves a raw go-getter Source URL to a directory on
 // disk, either by returning the local path directly (for local
 // sources) or by downloading into a hashed cache directory. The
-// in-memory mutex is used to serialise concurrent downloads of the
-// same source.
+// Server mutex is used to serialise source downloads and cache
+// checks globally (across all sources), matching fetchModule's
+// locking. This is coarser than strictly necessary — unrelated
+// sources cannot download concurrently — but keeps the locking model
+// simple and deadlock-free.
 func (s *Server) fetchSource(ctx context.Context, req Request) (string, error) {
 	if isLocalSource(req.Source) {
 		abs, err := localSourcePath(req.Source)
