@@ -41,6 +41,34 @@ func TestNewCustom_HostWithPort(t *testing.T) {
 	assert.Equal(t, "registry.internal:8443", c.Host())
 }
 
+// TestNewCustom_WithBaseURLOverrideRedrivesHost ensures that when
+// WithBaseURL overrides the constructor's baseURL, the Host() value
+// (used for cache scoping and bearer-token injection) reflects the
+// OVERRIDE, not the original argument. Otherwise auth scope can
+// disagree with the URL requests actually go to.
+func TestNewCustom_WithBaseURLOverrideRedrivesHost(t *testing.T) {
+	t.Parallel()
+	c, err := NewCustom(
+		"https://original.example.com/v1/modules",
+		WithBaseURL("https://override.example.com:8443/api/registry/v1/modules"),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "https://override.example.com:8443/api/registry/v1/modules", c.BaseURL())
+	assert.Equal(t, "override.example.com:8443", c.Host())
+}
+
+// TestNewCustom_WithBaseURLOverrideValidated ensures a bad override
+// still produces an error rather than being accepted because the
+// original argument parsed cleanly.
+func TestNewCustom_WithBaseURLOverrideValidated(t *testing.T) {
+	t.Parallel()
+	_, err := NewCustom(
+		"https://original.example.com/v1/modules",
+		WithBaseURL("not a url"),
+	)
+	require.Error(t, err)
+}
+
 // TestCustom_Lists exercises a Custom registry against the httptest
 // server defined in registry_test.go. Custom uses body-preferred
 // download resolution like OpenTofu.

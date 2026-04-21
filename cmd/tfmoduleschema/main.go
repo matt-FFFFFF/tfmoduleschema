@@ -178,6 +178,14 @@ func validateRequestFlags(cmd *cli.Command) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("required flag(s) missing: %s", strings.Join(missing, ", "))
 	}
+	// Classic registry path: --registry=custom must have a URL. This
+	// catches `--registry custom` without `--registry-url`, which
+	// would otherwise fail much later with "no custom registry
+	// configured" from the server.
+	if registryTypeFromCmd(cmd) == tfmoduleschema.RegistryTypeCustom &&
+		strings.TrimSpace(cmd.String("registry-url")) == "" {
+		return fmt.Errorf("--registry=custom requires --registry-url")
+	}
 	return nil
 }
 

@@ -82,11 +82,19 @@ func parseInputHost(input string) (bypass, host string, err error) {
 	}
 	// Full URL? (has scheme + host)
 	if u, perr := url.Parse(input); perr == nil && u.Scheme != "" && u.Host != "" {
+		scheme := strings.ToLower(u.Scheme)
+		if scheme != "https" && scheme != "http" {
+			return "", "", fmt.Errorf("%w: unsupported URL scheme %q (only https/http are accepted)", ErrDiscoveryFailed, u.Scheme)
+		}
 		if p := strings.Trim(u.Path, "/"); p != "" {
+			// Full URL with path: bypass discovery. http is allowed
+			// here only because the caller is asserting they know
+			// the modules.v1 endpoint outright (e.g. a test server).
 			return strings.TrimRight(input, "/"), strings.ToLower(u.Host), nil
 		}
 		// scheme + host + no path → treat the Host as the discovery
-		// input, fall through.
+		// input. Discovery itself always uses https per the spec;
+		// the scheme of the input URL is discarded.
 		input = u.Host
 	}
 	h := strings.ToLower(strings.TrimSpace(input))

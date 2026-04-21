@@ -27,6 +27,12 @@ type Server struct {
 	cacheStatusFn CacheStatusFunc
 	registries    map[RegistryType]registry.Registry
 
+	// pendingCustom is populated by WithCustomRegistry and consumed
+	// lazily by registryFor on first use. Deferring construction
+	// means subsequent ServerOptions (notably WithHTTPClient) take
+	// effect even when applied AFTER WithCustomRegistry.
+	pendingCustom *pendingCustomRegistry
+
 	// in-memory caches
 	moduleCache map[moduleKey]*Module
 
@@ -106,9 +112,6 @@ func WithCustomRegistry(input string, opts ...registry.Option) ServerOption {
 		if err != nil {
 			panic(fmt.Errorf("WithCustomRegistry: %w", err))
 		}
-		if s.registries == nil {
-			s.registries = map[RegistryType]registry.Registry{}
-		}
 		// Resolve a token from TF_TOKEN_<host> / credentials.tfrc.json
 		// for the INPUT host. A caller-supplied WithBearerToken in
 		// opts takes precedence because options apply in order and
@@ -124,8 +127,19 @@ func WithCustomRegistry(input string, opts ...registry.Option) ServerOption {
 		if tok, _ := registry.ResolveTokenForHost(host); tok != "" {
 			resolvedOpts = append([]registry.Option{registry.WithBearerToken(tok)}, opts...)
 		}
-		s.registries[RegistryTypeCustom] = registry.NewLazyCustom(input, s.httpClient, resolvedOpts...)
+		// Defer LazyCustom construction to registryFor so the final
+		// s.httpClient is used even when WithHTTPClient is applied
+		// after WithCustomRegistry.
+		s.pendingCustom = &pendingCustomRegistry{input: input, opts: resolvedOpts}
 	}
+}
+
+// pendingCustomRegistry carries the configuration supplied by
+// WithCustomRegistry until registryFor materialises the actual
+// registry.LazyCustom instance using the Server's final httpClient.
+type pendingCustomRegistry struct {
+	input string
+	opts  []registry.Option
 }
 
 // CacheDir returns the cache directory in use by this Server.
@@ -139,6 +153,11 @@ func (s *Server) Cleanup() error { return nil }
 // constructing a default for the public registries if none was injected
 // via WithRegistry. RegistryTypeCustom has no default and must be
 // installed via WithCustomRegistry or WithRegistry before use.
+//
+// For custom registries, a LazyCustom is materialised on first use
+// from the pending WithCustomRegistry config. Deferring construction
+// until now means any WithHTTPClient applied AFTER WithCustomRegistry
+// still takes effect.
 func (s *Server) registryFor(t RegistryType) (registry.Registry, error) {
 	t = normalizedRegistryType(t)
 	if r, ok := s.registries[t]; ok && r != nil {
@@ -148,7 +167,23 @@ func (s *Server) registryFor(t RegistryType) (registry.Registry, error) {
 	case RegistryTypeTerraform:
 		return registry.NewTerraform(registry.WithHTTPClient(s.httpClient)), nil
 	case RegistryTypeCustom:
-		return nil, fmt.Errorf("%w: no custom registry configured; install one with WithCustomRegistry or WithRegistry(RegistryTypeCustom, ...)", ErrInvalidRequest)
+		if s.pendingCustom == nil {
+			return nil, fmt.Errorf("%w: no custom registry configured; install one with WithCustomRegistry or WithRegistry(RegistryTypeCustom, ...)", ErrInvalidRequest)
+		}
+		s.mu.Lock()
+		// Re-check under the lock to avoid racing constructors when
+		// two goroutines hit a cold custom registry simultaneously.
+		if r, ok := s.registries[RegistryTypeCustom]; ok && r != nil {
+			s.mu.Unlock()
+			return r, nil
+		}
+		r := registry.NewLazyCustom(s.pendingCustom.input, s.httpClient, s.pendingCustom.opts...)
+		if s.registries == nil {
+			s.registries = map[RegistryType]registry.Registry{}
+		}
+		s.registries[RegistryTypeCustom] = r
+		s.mu.Unlock()
+		return r, nil
 	default:
 		return registry.NewOpenTofu(registry.WithHTTPClient(s.httpClient)), nil
 	}

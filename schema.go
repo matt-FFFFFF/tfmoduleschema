@@ -167,12 +167,20 @@ func (s *Server) getModuleFromSource(ctx context.Context, req Request, subpath s
 		subpath:  subpath,
 	}
 
-	s.mu.RLock()
-	if m, ok := s.moduleCache[key]; ok {
+	// For LOCAL sources we deliberately bypass the in-memory module
+	// cache: the files on disk are the source of truth and callers
+	// expect edits to be picked up on the next call. Remote sources
+	// are content-addressed by their URL (which should pin a ref)
+	// and are therefore safe to memoise.
+	local := isLocalSource(req.Source)
+	if !local {
+		s.mu.RLock()
+		if m, ok := s.moduleCache[key]; ok {
+			s.mu.RUnlock()
+			return m, nil
+		}
 		s.mu.RUnlock()
-		return m, nil
 	}
-	s.mu.RUnlock()
 
 	dir, err := s.fetchSource(ctx, req)
 	if err != nil {
@@ -189,9 +197,11 @@ func (s *Server) getModuleFromSource(ctx context.Context, req Request, subpath s
 		return nil, fmt.Errorf("inspecting module %q: %w", target, err)
 	}
 
-	s.mu.Lock()
-	s.moduleCache[key] = m
-	s.mu.Unlock()
+	if !local {
+		s.mu.Lock()
+		s.moduleCache[key] = m
+		s.mu.Unlock()
+	}
 	return m, nil
 }
 

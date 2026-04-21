@@ -201,6 +201,35 @@ func TestDiscoverModulesEndpoint_RejectsGarbage(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestParseInputHost_RejectsNonHTTPSchemes ensures only http/https
+// URLs are accepted. Other schemes (ftp, file, etc.) are rejected so
+// they can't slip through the full-URL-with-path bypass and reach a
+// caller expecting a Terraform-compatible endpoint.
+func TestParseInputHost_RejectsNonHTTPSchemes(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"ftp://registry.example.com/v1/modules",
+		"file:///tmp/modules",
+		"gopher://registry.example.com/v1/modules",
+	}
+	for _, in := range cases {
+		_, _, err := parseInputHost(in)
+		require.Error(t, err, in)
+		assert.ErrorIs(t, err, ErrDiscoveryFailed, in)
+	}
+}
+
+// TestParseInputHost_AcceptsHTTPWithPath: http:// is accepted for the
+// full-URL-with-path bypass form only (this is how tests point at
+// httptest.NewServer, and how a user can skip discovery entirely).
+func TestParseInputHost_AcceptsHTTPWithPath(t *testing.T) {
+	t.Parallel()
+	bypass, host, err := parseInputHost("http://127.0.0.1:8080/v1/modules")
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1:8080/v1/modules", bypass)
+	assert.Equal(t, "127.0.0.1:8080", host)
+}
+
 func TestResolveDiscoveryReference(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

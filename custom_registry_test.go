@@ -145,6 +145,60 @@ func TestServer_CustomRegistry_Discovery(t *testing.T) {
 	require.NotEmpty(t, m.Variables)
 }
 
+// TestServer_CustomRegistry_HTTPClientAppliedAfter verifies that
+// WithHTTPClient takes effect even when applied AFTER
+// WithCustomRegistry. The LazyCustom must be materialised on first
+// use so it picks up the final httpClient; otherwise discovery would
+// be sent via http.DefaultClient and blow up against the bogus
+// https://registry.internal host.
+func TestServer_CustomRegistry_HTTPClientAppliedAfter(t *testing.T) {
+	t.Parallel()
+
+	abs, err := filepath.Abs(filepath.Join("testdata", "basic"))
+	require.NoError(t, err)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/terraform.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"modules.v1":"/v1/modules/"}`)
+	})
+	mux.HandleFunc("/v1/modules/", func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/versions"):
+			_, _ = io.WriteString(w, `{"modules":[{"versions":[{"version":"1.0.0"}]}]}`)
+		case strings.HasSuffix(r.URL.Path, "/download"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"location":"file://`+abs+`"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	rewriteHost := "registry.internal"
+	testSrvURL, _ := url.Parse(srv.URL)
+	client := &http.Client{Transport: &hostRewriteTransport{
+		match:  rewriteHost,
+		target: testSrvURL,
+	}}
+
+	// Order matters: WithCustomRegistry first, WithHTTPClient LAST.
+	s := NewServer(nil,
+		WithCacheDir(t.TempDir()),
+		WithCustomRegistry(rewriteHost),
+		WithHTTPClient(client),
+	)
+	defer s.Cleanup()
+
+	m, err := s.GetModule(context.Background(), Request{
+		Namespace: "anton", Name: "mod", System: "aws",
+		RegistryType: RegistryTypeCustom,
+	})
+	require.NoError(t, err, "late WithHTTPClient must reach the custom registry")
+	require.NotEmpty(t, m.Variables)
+}
+
 // hostRewriteTransport redirects requests whose Host matches `match`
 // onto `target`. Used to let tests exercise code that hardcodes
 // https://<host>/ URLs.

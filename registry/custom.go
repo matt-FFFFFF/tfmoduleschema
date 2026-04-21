@@ -24,10 +24,37 @@ type Custom struct {
 // baseURL must be a full base including the /v1/modules (or equivalent)
 // path — host-only input is the concern of the service-discovery layer,
 // not this constructor.
+//
+// The supplied baseURL is the DEFAULT: options may override it via
+// WithBaseURL. When that happens the host used for cache scoping and
+// bearer-token injection is derived from the OVERRIDE, so auth scope
+// and the actual request URL cannot disagree.
 func NewCustom(baseURL string, opts ...Option) (*Custom, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, fmt.Errorf("custom registry: baseURL must not be empty")
 	}
+	if _, err := parseAndValidateBaseURL(baseURL); err != nil {
+		return nil, err
+	}
+	// Apply defaults using the supplied baseURL as the default. Options
+	// may still override it via WithBaseURL.
+	opts2 := applyOptions(strings.TrimRight(baseURL, "/"), opts)
+	// Re-parse the final base URL after options apply so host scoping
+	// matches whatever URL we'll actually use for requests.
+	finalURL, err := parseAndValidateBaseURL(opts2.baseURL)
+	if err != nil {
+		return nil, err
+	}
+	applyBearer(&opts2, finalURL.Host)
+	return &Custom{
+		opts: opts2,
+		host: finalURL.Host,
+	}, nil
+}
+
+// parseAndValidateBaseURL returns the parsed URL if it includes scheme
+// and host, or a descriptive error otherwise.
+func parseAndValidateBaseURL(baseURL string) (*url.URL, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("custom registry: parsing baseURL %q: %w", baseURL, err)
@@ -35,14 +62,7 @@ func NewCustom(baseURL string, opts ...Option) (*Custom, error) {
 	if u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("custom registry: baseURL %q must include scheme and host", baseURL)
 	}
-	// Apply defaults using the supplied baseURL as the default. Options
-	// may still override it via WithBaseURL.
-	opts2 := applyOptions(strings.TrimRight(baseURL, "/"), opts)
-	applyBearer(&opts2, u.Host)
-	return &Custom{
-		opts: opts2,
-		host: u.Host,
-	}, nil
+	return u, nil
 }
 
 // BaseURL returns the base URL of this custom registry client.

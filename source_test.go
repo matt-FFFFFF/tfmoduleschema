@@ -217,3 +217,33 @@ func TestCacheSourceDir(t *testing.T) {
 	assert.NotEqual(t, a, c)
 	assert.Contains(t, a, filepath.Join("/cache", "source"))
 }
+
+// TestGetModule_LocalSource_PicksUpEdits: local Source paths must be
+// re-inspected on every call, not memoised by the in-memory module
+// cache. Remote sources are content-addressed and may be cached; local
+// paths are the source of truth on disk and callers expect edits to
+// be visible immediately.
+func TestGetModule_LocalSource_PicksUpEdits(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	tf := filepath.Join(dir, "main.tf")
+	require.NoError(t, os.WriteFile(tf, []byte(`variable "first" {}`), 0o644))
+
+	s := NewServer(nil, WithCacheDir(t.TempDir()))
+	defer s.Cleanup()
+
+	req := Request{Source: dir}
+	m1, err := s.GetModule(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, m1.Variables, 1)
+	assert.Equal(t, "first", m1.Variables[0].Name)
+
+	// Rewrite the module. A cached lookup would still report "first".
+	require.NoError(t, os.WriteFile(tf, []byte(`variable "second" {}`+"\n"+`variable "third" {}`), 0o644))
+
+	m2, err := s.GetModule(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, m2.Variables, 2, "local-source module edits must be visible on next call")
+	names := []string{m2.Variables[0].Name, m2.Variables[1].Name}
+	assert.ElementsMatch(t, []string{"second", "third"}, names)
+}
