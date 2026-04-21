@@ -25,6 +25,16 @@ func TestNewCustom_RequiresFullBaseURL(t *testing.T) {
 	// layer's problem to solve.
 	_, err = NewCustom("registry.example.com")
 	require.Error(t, err)
+
+	// baseURL must be a clean path prefix: query strings, fragments,
+	// and userinfo would produce malformed request URLs downstream
+	// when the http layer concatenates paths onto it.
+	_, err = NewCustom("https://reg.example.com/v1/modules?x=1")
+	require.Error(t, err, "query string should be rejected")
+	_, err = NewCustom("https://reg.example.com/v1/modules#frag")
+	require.Error(t, err, "fragment should be rejected")
+	_, err = NewCustom("https://user:pass@reg.example.com/v1/modules")
+	require.Error(t, err, "userinfo should be rejected")
 }
 
 func TestNewCustom_TrimsTrailingSlash(t *testing.T) {

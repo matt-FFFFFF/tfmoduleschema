@@ -41,8 +41,14 @@ func (c CacheStatus) String() string {
 
 // CacheStatusFunc is invoked by the Server after resolving a module
 // request to report whether the module was found in the local cache
-// (CacheStatusHit) or a download was attempted (CacheStatusMiss). The
-// request passed in has a concrete (fixed) version.
+// (CacheStatusHit) or a download was attempted (CacheStatusMiss).
+//
+// For classic registry requests the request passed in has a concrete
+// (fixed) version. For Source-mode requests (request.Source != "")
+// the Version field holds whatever the caller supplied — which may
+// be empty or a raw ref embedded in the go-getter URL — because
+// there is no registry to resolve a constraint against. Callbacks
+// that need a concrete version should branch on request.Source.
 type CacheStatusFunc func(request Request, status CacheStatus)
 
 // ServerOption configures a Server at construction time.

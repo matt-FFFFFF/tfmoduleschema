@@ -54,8 +54,12 @@ func NewCustom(baseURL string, opts ...Option) (*Custom, error) {
 	}, nil
 }
 
-// parseAndValidateBaseURL returns the parsed URL if it includes scheme
-// and host, or a descriptive error otherwise.
+// parseAndValidateBaseURL returns the parsed URL if it is a clean
+// path prefix usable as the base for registry API requests, or a
+// descriptive error otherwise. A clean prefix means scheme + host
+// are both present AND the URL carries no query string, fragment,
+// or userinfo — those would produce malformed URLs when http.go
+// concatenates paths onto baseURL for ListVersions/ResolveDownload.
 func parseAndValidateBaseURL(baseURL string) (*url.URL, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -63,6 +67,15 @@ func parseAndValidateBaseURL(baseURL string) (*url.URL, error) {
 	}
 	if u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("custom registry: baseURL %q must include scheme and host", baseURL)
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return nil, fmt.Errorf("custom registry: baseURL %q must not contain a query string", baseURL)
+	}
+	if u.Fragment != "" {
+		return nil, fmt.Errorf("custom registry: baseURL %q must not contain a fragment", baseURL)
+	}
+	if u.User != nil {
+		return nil, fmt.Errorf("custom registry: baseURL %q must not contain userinfo (use WithBearerToken for credentials)", baseURL)
 	}
 	return u, nil
 }
