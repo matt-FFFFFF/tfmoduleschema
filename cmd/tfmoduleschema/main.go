@@ -147,7 +147,10 @@ func registryTypeFromString(s string) tfmoduleschema.RegistryType {
 //
 // Rules:
 //   - --source is mutually exclusive with --namespace, --name, --system,
-//     --registry-url, and --registry-token.
+//     and --registry-url. A stray --registry-token (e.g. from
+//     TFMODULESCHEMA_REGISTRY_TOKEN being set in the environment for
+//     other invocations) is tolerated under --source because source
+//     mode never contacts a registry and the token is simply unused.
 //   - When --source is not set, all three of --namespace/--name/--system
 //     are required (mirroring the old Required:true behaviour, now
 //     enforced in code so --source can opt out).
@@ -161,15 +164,14 @@ func validateRequestFlags(cmd *cli.Command) error {
 	name := strings.TrimSpace(cmd.String("name"))
 	sys := strings.TrimSpace(cmd.String("system"))
 	regURL := strings.TrimSpace(cmd.String("registry-url"))
-	regTok := strings.TrimSpace(cmd.String("registry-token"))
 	version := strings.TrimSpace(cmd.String("version-constraint"))
 
 	if source != "" {
 		if ns != "" || name != "" || sys != "" {
 			return fmt.Errorf("--source is mutually exclusive with --namespace/--name/--system")
 		}
-		if regURL != "" || regTok != "" {
-			return fmt.Errorf("--source is mutually exclusive with --registry-url/--registry-token")
+		if regURL != "" {
+			return fmt.Errorf("--source is mutually exclusive with --registry-url")
 		}
 		// Source mode has no registry to resolve a constraint
 		// against, so --version-constraint must either be empty or
@@ -216,12 +218,19 @@ func validateRequestFlags(cmd *cli.Command) error {
 	}
 	// --registry-token (from flag or TFMODULESCHEMA_REGISTRY_TOKEN)
 	// is only applied when a custom registry is configured via
-	// --registry-url. Silently dropping it would be a security
-	// footgun: a user who thinks they're sending a bearer token to
-	// a public registry could be surprised later when the token
-	// turns out to be unused. Fail fast instead.
-	if regTok != "" && regURL == "" {
-		return fmt.Errorf("--registry-token (or TFMODULESCHEMA_REGISTRY_TOKEN) requires --registry-url")
+	// --registry-url. If the user passes --registry-token explicitly
+	// without a registry URL, silently dropping it would be a
+	// security footgun, so we fail fast. A token that only came in
+	// via TFMODULESCHEMA_REGISTRY_TOKEN, however, is tolerated: the
+	// env var is typically exported for other invocations against a
+	// private registry, and forcing users to unset it before running
+	// against a public registry (or with --source) is unnecessarily
+	// hostile.
+	regTok := strings.TrimSpace(cmd.String("registry-token"))
+	envTok := strings.TrimSpace(os.Getenv("TFMODULESCHEMA_REGISTRY_TOKEN"))
+	flagTok := regTok != "" && regTok != envTok
+	if flagTok && regURL == "" {
+		return fmt.Errorf("--registry-token requires --registry-url")
 	}
 	return nil
 }

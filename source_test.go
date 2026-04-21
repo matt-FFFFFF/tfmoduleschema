@@ -23,6 +23,8 @@ func TestIsLocalSource(t *testing.T) {
 		{"../rel", true},
 		{".", true},
 		{"..", true},
+		{".terraform/modules/acm_us_east_1/", true},
+		{".hidden", true},
 		{"some/path", false},
 		{"github.com/org/repo", false},
 		{`C:\src\mod`, true},
@@ -60,6 +62,21 @@ func TestLocalSourcePath(t *testing.T) {
 	got, err = localSourcePath("file::/tmp/foo")
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/foo", got)
+
+	// file:// with explicit "localhost" host — RFC 8089 allows this
+	// and it must resolve to the same path as the host-less form.
+	got, err = localSourcePath("file://localhost/tmp/foo")
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/foo", got)
+
+	// Percent-encoded segments must be decoded.
+	got, err = localSourcePath("file:///tmp/has%20space/foo")
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/has space/foo", got)
+
+	// Non-local host in a file URI is not resolvable here.
+	_, err = localSourcePath("file://someserver/share/foo")
+	require.Error(t, err)
 }
 
 // TestGetModule_Source_Local exercises the Source field pointing at a
@@ -73,12 +90,20 @@ func TestGetModule_Source_Local(t *testing.T) {
 	require.NoError(t, err)
 
 	cacheDir := t.TempDir()
-	s := NewServer(nil, WithCacheDir(cacheDir))
+	// Local sources must not invoke the CacheStatus callback:
+	// nothing is cached, and reporting "hit" would be misleading.
+	var statuses []CacheStatus
+	s := NewServer(nil,
+		WithCacheDir(cacheDir),
+		WithCacheStatusFunc(func(_ Request, st CacheStatus) { statuses = append(statuses, st) }),
+	)
 	defer s.Cleanup()
 
 	m, err := s.GetModule(context.Background(), Request{Source: abs})
 	require.NoError(t, err)
 	require.NotNil(t, m)
+
+	assert.Empty(t, statuses, "local sources must not fire CacheStatus")
 
 	// testdata/basic/main.tf declares these variables.
 	var names []string
