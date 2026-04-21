@@ -87,16 +87,26 @@ func (l *LazyCustom) ResolveDownload(ctx context.Context, req DownloadRequest) (
 
 func (l *LazyCustom) resolve(ctx context.Context) error {
 	l.once.Do(func() {
-		base, _, err := DiscoverModulesEndpoint(ctx, l.httpClient, l.input)
+		base, inputHost, err := DiscoverModulesEndpoint(ctx, l.httpClient, l.input)
 		if err != nil {
 			l.err = fmt.Errorf("custom registry discovery: %w", err)
 			return
 		}
 		// Ensure the underlying Custom uses the same httpClient as
 		// discovery (for auth transports installed by the caller).
+		// Scope bearer injection to the INPUT host (the host a token
+		// was resolved for via TF_TOKEN_<host> / credentials.tfrc.json)
+		// so that a discovered modules.v1 endpoint on a different
+		// host does not receive credentials it was not meant to see.
+		// WithBearerHost is applied LAST so it wins over any earlier
+		// (default or caller-supplied) setting; empty inputHost falls
+		// back to the base URL host naturally inside applyBearer.
 		opts := l.opts
 		if l.httpClient != nil {
 			opts = append(opts, WithHTTPClient(l.httpClient))
+		}
+		if inputHost != "" {
+			opts = append(opts, WithBearerHost(inputHost))
 		}
 		c, err := NewCustom(base, opts...)
 		if err != nil {

@@ -70,8 +70,8 @@ func (r *Custom) BaseURL() string { return r.opts.baseURL }
 
 // Host returns the network host of the registry (e.g. "registry.example.com"
 // or "registry.internal:8443"). This is used by the Server to derive a
-// stable on-disk cache directory and — in later commits — to scope
-// bearer-token injection.
+// stable on-disk cache directory and to scope bearer-token injection
+// when no explicit WithBearerHost was supplied.
 func (r *Custom) Host() string { return r.host }
 
 // ListVersions returns all versions of the requested module.

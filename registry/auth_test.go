@@ -164,3 +164,68 @@ func TestBearerTransport_SendsOnRedirectBackToSameHost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer sekrit", secondAuth, "same-host redirect must still carry the bearer")
 }
+
+// TestBearerTransport_WithBearerHost_Override: WithBearerHost overrides
+// the fall-back host so the token is only injected on requests whose
+// URL host matches the override. Requests to the registry's own base
+// URL host (which does NOT match the override) must not carry the
+// Authorization header. This is the behaviour LazyCustom relies on
+// when service discovery returns a modules.v1 URL on a different host
+// than the user-configured input: the token should follow the user's
+// expectation (the input host), not accidentally leak to the
+// discovered host.
+func TestBearerTransport_WithBearerHost_Override(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/modules/n/m/s/versions", func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Scope the bearer to a host that is NOT the server's host. The
+	// request goes to srv, so the token must be stripped.
+	c, err := NewCustom(srv.URL+"/v1/modules",
+		WithBearerToken("sekrit"),
+		WithBearerHost("other.invalid"),
+	)
+	require.NoError(t, err)
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, gotAuth, "bearer host override must suppress injection on non-matching hosts")
+}
+
+// TestBearerTransport_WithBearerHost_Matches: WithBearerHost also
+// works affirmatively — when the override matches the request host,
+// the token is injected.
+func TestBearerTransport_WithBearerHost_Matches(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/modules/n/m/s/versions", func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"modules":[{"versions":[]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	srvHost := strings.TrimPrefix(srv.URL, "http://")
+	c, err := NewCustom(srv.URL+"/v1/modules",
+		WithBearerToken("sekrit"),
+		WithBearerHost(srvHost),
+	)
+	require.NoError(t, err)
+	_, err = c.ListVersions(context.Background(), VersionsRequest{
+		Namespace: "n", Name: "m", System: "s",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer sekrit", gotAuth)
+}

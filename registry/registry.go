@@ -69,6 +69,7 @@ type options struct {
 	baseURL     string
 	httpClient  *http.Client
 	bearerToken string
+	bearerHost  string
 }
 
 // WithBaseURL overrides the default base URL. Useful in tests and to point

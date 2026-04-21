@@ -19,21 +19,51 @@ import (
 // WithBearerToken composes with WithHTTPClient: if a caller supplies
 // both, the bearer transport wraps the supplied client's transport.
 // The host scope is taken from the registry's own base URL at apply
-// time, so install this option AFTER WithBaseURL (or on a client
-// constructed directly from a URL) if you override the default.
+// time by default, so install this option AFTER WithBaseURL (or on a
+// client constructed directly from a URL) if you override the
+// default. To scope the token to a DIFFERENT host than the request
+// URL's host (e.g. when service discovery yielded a modules.v1 URL
+// on a different host than the user-configured input), use
+// WithBearerHost.
 func WithBearerToken(token string) Option {
 	return func(o *options) {
 		o.bearerToken = token
 	}
 }
 
+// WithBearerHost overrides the host against which bearer-token
+// injection is scoped. When set, the Authorization header is attached
+// only to requests whose URL host matches this value (case-insensitive),
+// regardless of the registry's own base URL.
+//
+// This is the correct hook when a token was resolved for one host
+// (the user-facing input host) but registry requests actually go to
+// a different host produced by service discovery. Scoping to the
+// input host prevents leaking credentials to an untrusted discovered
+// host.
+//
+// An empty host is treated as "unset" and the bearer transport falls
+// back to the registry's own base URL host, matching the historical
+// behaviour.
+func WithBearerHost(host string) Option {
+	return func(o *options) {
+		o.bearerHost = host
+	}
+}
+
 // applyBearer installs a host-scoped bearer-token RoundTripper on
 // o.httpClient if a token was configured. It is called by registry
 // constructors (OpenTofu, Terraform, Custom) after applyOptions has
-// run so the final base URL is known.
-func applyBearer(o *options, host string) {
+// run so the final base URL is known. The caller passes the
+// fall-back host (the registry's own base URL host); if
+// WithBearerHost was supplied, that overrides the fall-back.
+func applyBearer(o *options, fallbackHost string) {
 	if o.bearerToken == "" {
 		return
+	}
+	host := fallbackHost
+	if o.bearerHost != "" {
+		host = o.bearerHost
 	}
 	base := o.httpClient
 	if base == nil {
