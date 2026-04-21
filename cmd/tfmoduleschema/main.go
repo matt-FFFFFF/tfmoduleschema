@@ -15,6 +15,7 @@ import (
 	cli "github.com/urfave/cli/v3"
 
 	"github.com/matt-FFFFFF/tfmoduleschema"
+	"github.com/matt-FFFFFF/tfmoduleschema/registry"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -35,27 +36,24 @@ func buildRootCommand() *cli.Command {
 		Version: version,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:     "namespace",
-				Aliases:  []string{"ns"},
-				Usage:    "Module namespace (e.g. Azure, terraform-aws-modules)",
-				Required: true,
+				Name:    "namespace",
+				Aliases: []string{"ns"},
+				Usage:   "Module namespace (e.g. Azure, terraform-aws-modules). Required unless --source is set",
 			},
 			&cli.StringFlag{
-				Name:     "name",
-				Aliases:  []string{"n"},
-				Usage:    "Module name (e.g. avm-res-compute-virtualmachine, vpc)",
-				Required: true,
+				Name:    "name",
+				Aliases: []string{"n"},
+				Usage:   "Module name (e.g. avm-res-compute-virtualmachine, vpc). Required unless --source is set",
 			},
 			&cli.StringFlag{
-				Name:     "system",
-				Aliases:  []string{"s"},
-				Usage:    "Module target system (e.g. aws, azurerm). Called \"provider\" in the Hashi API",
-				Required: true,
+				Name:    "system",
+				Aliases: []string{"s"},
+				Usage:   "Module target system (e.g. aws, azurerm). Called \"provider\" in the Hashi API. Required unless --source is set",
 			},
 			&cli.StringFlag{
 				Name:    "version-constraint",
 				Aliases: []string{"vc"},
-				Usage:   "Version or constraint (e.g. 1.2.3, ~> 1.2). Empty for latest",
+				Usage:   "Version or constraint (e.g. 1.2.3, ~> 1.2). Empty for latest. Must be a concrete version when --source is set",
 			},
 			&cli.StringFlag{
 				Name:    "submodule",
@@ -63,10 +61,23 @@ func buildRootCommand() *cli.Command {
 				Usage:   "Target a submodule by path (e.g. modules/network) instead of the root module",
 			},
 			&cli.StringFlag{
+				Name:    "source",
+				Usage:   "Local path or go-getter source (e.g. ./mymod, git::https://...). Mutually exclusive with --namespace/--name/--system",
+			},
+			&cli.StringFlag{
 				Name:    "registry",
 				Aliases: []string{"r"},
-				Usage:   "Registry type: opentofu (default) or terraform",
+				Usage:   "Registry type: opentofu (default), terraform, or custom",
 				Value:   "opentofu",
+			},
+			&cli.StringFlag{
+				Name:  "registry-url",
+				Usage: "Custom registry host or base URL (implies --registry=custom). Host-only input triggers Terraform remote service discovery",
+			},
+			&cli.StringFlag{
+				Name:    "registry-token",
+				Usage:   "Bearer token for the custom registry (overrides TF_TOKEN_<host> and credentials.tfrc.json)",
+				Sources: cli.EnvVars("TFMODULESCHEMA_REGISTRY_TOKEN"),
 			},
 			&cli.StringFlag{
 				Name:    "cache-dir",
@@ -87,14 +98,16 @@ func buildRootCommand() *cli.Command {
 	}
 }
 
-// requestFromCmd builds a Request from the global CLI flags.
+// requestFromCmd builds a Request from the global CLI flags. It does
+// NOT validate flag combinations; call validateRequestFlags first.
 func requestFromCmd(cmd *cli.Command) tfmoduleschema.Request {
 	return tfmoduleschema.Request{
 		Namespace:    cmd.String("namespace"),
 		Name:         cmd.String("name"),
 		System:       cmd.String("system"),
 		Version:      cmd.String("version-constraint"),
-		RegistryType: registryTypeFromString(cmd.String("registry")),
+		Source:       cmd.String("source"),
+		RegistryType: registryTypeFromCmd(cmd),
 	}
 }
 
@@ -103,17 +116,69 @@ func versionsRequestFromCmd(cmd *cli.Command) tfmoduleschema.VersionsRequest {
 		Namespace:    cmd.String("namespace"),
 		Name:         cmd.String("name"),
 		System:       cmd.String("system"),
-		RegistryType: registryTypeFromString(cmd.String("registry")),
+		RegistryType: registryTypeFromCmd(cmd),
 	}
+}
+
+// registryTypeFromCmd returns the effective registry type, honouring
+// the implicit "--registry-url forces custom" rule.
+func registryTypeFromCmd(cmd *cli.Command) tfmoduleschema.RegistryType {
+	if strings.TrimSpace(cmd.String("registry-url")) != "" {
+		return tfmoduleschema.RegistryTypeCustom
+	}
+	return registryTypeFromString(cmd.String("registry"))
 }
 
 func registryTypeFromString(s string) tfmoduleschema.RegistryType {
 	switch strings.ToLower(s) {
 	case "terraform":
 		return tfmoduleschema.RegistryTypeTerraform
+	case "custom":
+		return tfmoduleschema.RegistryTypeCustom
 	default:
 		return tfmoduleschema.RegistryTypeOpenTofu
 	}
+}
+
+// validateRequestFlags enforces flag-combination rules that would
+// otherwise manifest as confusing downstream errors. It must be called
+// before dispatching a Request or a VersionsRequest.
+//
+// Rules:
+//   - --source is mutually exclusive with --namespace, --name, --system.
+//   - When --source is not set, all three of --namespace/--name/--system
+//     are required (mirroring the old Required:true behaviour, now
+//     enforced in code so --source can opt out).
+//   - When --registry=custom is selected (explicitly or via
+//     --registry-url), --registry-url must be supplied unless --source
+//     is set.
+func validateRequestFlags(cmd *cli.Command) error {
+	source := strings.TrimSpace(cmd.String("source"))
+	ns := strings.TrimSpace(cmd.String("namespace"))
+	name := strings.TrimSpace(cmd.String("name"))
+	sys := strings.TrimSpace(cmd.String("system"))
+
+	if source != "" {
+		if ns != "" || name != "" || sys != "" {
+			return fmt.Errorf("--source is mutually exclusive with --namespace/--name/--system")
+		}
+		return nil
+	}
+	// No source: classic registry path.
+	var missing []string
+	if ns == "" {
+		missing = append(missing, "--namespace")
+	}
+	if name == "" {
+		missing = append(missing, "--name")
+	}
+	if sys == "" {
+		missing = append(missing, "--system")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required flag(s) missing: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // submoduleFromCmd returns the cleaned submodule path from --submodule,
@@ -158,6 +223,9 @@ func hasWindowsVolume(p string) bool {
 // loadModule fetches either the root module or the submodule designated
 // by --submodule, depending on whether the flag is set.
 func loadModule(ctx context.Context, s *tfmoduleschema.Server, cmd *cli.Command) (*tfmoduleschema.Module, error) {
+	if err := validateRequestFlags(cmd); err != nil {
+		return nil, err
+	}
 	sub, err := submoduleFromCmd(cmd)
 	if err != nil {
 		return nil, err
@@ -175,17 +243,33 @@ func newServer(cmd *cli.Command) *tfmoduleschema.Server {
 		tfmoduleschema.WithCacheDir(cmd.String("cache-dir")),
 		tfmoduleschema.WithForceFetch(cmd.Bool("force-fetch")),
 	}
+	if url := strings.TrimSpace(cmd.String("registry-url")); url != "" {
+		var regOpts []registry.Option
+		if tok := strings.TrimSpace(cmd.String("registry-token")); tok != "" {
+			regOpts = append(regOpts, registry.WithBearerToken(tok))
+		}
+		opts = append(opts, tfmoduleschema.WithCustomRegistry(url, regOpts...))
+	}
 	if !cmd.Bool("quiet") {
 		opts = append(opts, tfmoduleschema.WithCacheStatusFunc(func(req tfmoduleschema.Request, status tfmoduleschema.CacheStatus) {
 			switch status {
 			case tfmoduleschema.CacheStatusHit:
-				fmt.Fprintf(os.Stderr, "cache hit: %s/%s/%s %s\n", req.Namespace, req.Name, req.System, req.Version)
+				fmt.Fprintf(os.Stderr, "cache hit: %s\n", cacheLabel(req))
 			case tfmoduleschema.CacheStatusMiss:
-				fmt.Fprintf(os.Stderr, "downloading: %s/%s/%s %s\n", req.Namespace, req.Name, req.System, req.Version)
+				fmt.Fprintf(os.Stderr, "downloading: %s\n", cacheLabel(req))
 			}
 		}))
 	}
 	return tfmoduleschema.NewServer(logger, opts...)
+}
+
+// cacheLabel produces a human label for a Request, preferring Source
+// when set so --source users don't see empty namespace/name fields.
+func cacheLabel(req tfmoduleschema.Request) string {
+	if req.Source != "" {
+		return req.Source
+	}
+	return fmt.Sprintf("%s/%s/%s %s", req.Namespace, req.Name, req.System, req.Version)
 }
 
 func printJSON(v any) error {
@@ -388,16 +472,19 @@ func submoduleCommand() *cli.Command {
 			{
 				Name:  "list",
 				Usage: "List submodule paths",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
-					defer s.Cleanup()
-					subs, err := s.ListSubmodules(ctx, requestFromCmd(cmd))
-					if err != nil {
-						return err
-					}
-					printList(subs)
-					return nil
-				},
+			Action: func(ctx context.Context, cmd *cli.Command) error {
+				if err := validateRequestFlags(cmd); err != nil {
+					return err
+				}
+				s := newServer(cmd)
+				defer s.Cleanup()
+				subs, err := s.ListSubmodules(ctx, requestFromCmd(cmd))
+				if err != nil {
+					return err
+				}
+				printList(subs)
+				return nil
+			},
 			},
 		},
 	}
@@ -413,6 +500,12 @@ func versionCommand() *cli.Command {
 			Name:  "list",
 			Usage: "List all versions the registry advertises",
 			Action: func(ctx context.Context, cmd *cli.Command) error {
+				if strings.TrimSpace(cmd.String("source")) != "" {
+					return fmt.Errorf("version list is not supported with --source: pin a concrete version in the source URL instead")
+				}
+				if err := validateRequestFlags(cmd); err != nil {
+					return err
+				}
 				s := newServer(cmd)
 				defer s.Cleanup()
 				vs, err := s.GetAvailableVersions(ctx, versionsRequestFromCmd(cmd))

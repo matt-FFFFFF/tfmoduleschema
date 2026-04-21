@@ -102,13 +102,29 @@ func WithCustomRegistry(input string, opts ...registry.Option) ServerOption {
 		// Validate the input shape up front so obvious programmer
 		// errors surface at option-application time rather than at
 		// first request.
-		if _, _, err := registry.DiscoverModulesEndpointInputCheck(input); err != nil {
+		_, host, err := registry.DiscoverModulesEndpointInputCheck(input)
+		if err != nil {
 			panic(fmt.Errorf("WithCustomRegistry: %w", err))
 		}
 		if s.registries == nil {
 			s.registries = map[RegistryType]registry.Registry{}
 		}
-		s.registries[RegistryTypeCustom] = registry.NewLazyCustom(input, s.httpClient, opts...)
+		// Resolve a token from TF_TOKEN_<host> / credentials.tfrc.json
+		// for the INPUT host. A caller-supplied WithBearerToken in
+		// opts takes precedence because options apply in order and
+		// both write to the same field — the explicit one, passed
+		// last, overwrites the resolved default.
+		//
+		// A resolver error (e.g. malformed credentials file) is
+		// intentionally non-fatal here: the custom registry may not
+		// require auth at all, and failing option application would
+		// prevent even unauthenticated calls. If a token really is
+		// needed, the registry call itself will return 401.
+		resolvedOpts := opts
+		if tok, _ := registry.ResolveTokenForHost(host); tok != "" {
+			resolvedOpts = append([]registry.Option{registry.WithBearerToken(tok)}, opts...)
+		}
+		s.registries[RegistryTypeCustom] = registry.NewLazyCustom(input, s.httpClient, resolvedOpts...)
 	}
 }
 
