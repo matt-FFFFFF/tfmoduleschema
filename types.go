@@ -53,13 +53,15 @@ type Request struct {
 	//	git::https://github.com/org/repo.git//modules/foo?ref=v1.2.3
 	//	s3::https://s3.amazonaws.com/bucket/module.zip
 	//
-	// When Source is set, Namespace, Name, System and RegistryType are
-	// ignored for download purposes; they are still honoured for cache
-	// key derivation when provided. Version must be empty or a concrete
-	// version — constraint expressions are rejected because there is no
-	// registry to resolve them against. Local paths (absolute,
-	// relative, or "file://") are inspected in place and are not copied
-	// into the cache.
+	// When Source is set, Namespace, Name, System, RegistryType and
+	// Version are ignored for download purposes. The in-memory and
+	// on-disk caches are keyed only by the Source string (and the
+	// subpath for submodule lookups); the other fields do not
+	// participate in cache key derivation. Version must be empty or a
+	// concrete version — constraint expressions are rejected because
+	// there is no registry to resolve them against. Local paths
+	// (absolute, "./", "../", ".", "..", or "file://") are inspected
+	// in place and are not copied into the cache.
 	Source string `json:"source,omitempty"`
 }
 

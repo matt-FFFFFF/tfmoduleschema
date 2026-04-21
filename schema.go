@@ -54,6 +54,9 @@ func (s *Server) GetSubmodule(ctx context.Context, req Request, subpath string) 
 // modules/ within the fetched module.
 func (s *Server) ListSubmodules(ctx context.Context, req Request) ([]string, error) {
 	if req.Source != "" {
+		if err := validateSourceRequest(req); err != nil {
+			return nil, err
+		}
 		dir, err := s.fetchSource(ctx, req)
 		if err != nil {
 			return nil, err

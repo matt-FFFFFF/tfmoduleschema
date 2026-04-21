@@ -22,17 +22,23 @@ var urlSchemeRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+\-.]*://`)
 // filesystem. Local sources are inspected in place and never copied
 // into the module cache.
 //
+// Only explicit local-path forms are treated as local. Bare strings
+// without a scheme, forced-getter prefix, or leading ./ ../ / are
+// treated as remote go-getter shorthand (e.g. "github.com/org/repo"),
+// matching Terraform's module-source conventions.
+//
 // The classification is:
 //
 //   - empty string: not local
 //   - "file::..." or "file://...": local
 //   - any other "<getter>::" prefix (git::, s3::, ...): remote
 //   - any "<scheme>://" prefix: remote
-//   - everything else (absolute, relative, or bare): local
+//   - absolute path ("/..."): local
+//   - relative path starting with "./", "../", or equal to "." / "..": local
+//   - anything else (bare shorthand like "github.com/x/y"): remote
 //
-// This is deliberately a classification step only. The actual path
-// normalisation is delegated to go-getter's FileDetector via
-// localSourcePath.
+// The actual path normalisation for local sources is delegated to
+// go-getter's FileDetector via localSourcePath.
 func isLocalSource(src string) bool {
 	if src == "" {
 		return false
@@ -43,7 +49,14 @@ func isLocalSource(src string) bool {
 	if urlSchemeRE.MatchString(src) {
 		return strings.HasPrefix(strings.ToLower(src), "file://")
 	}
-	return true
+	if strings.HasPrefix(src, "/") {
+		return true
+	}
+	if src == "." || src == ".." ||
+		strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") {
+		return true
+	}
+	return false
 }
 
 // localSourcePath converts a local source string into an absolute

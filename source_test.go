@@ -23,7 +23,8 @@ func TestIsLocalSource(t *testing.T) {
 		{"../rel", true},
 		{".", true},
 		{"..", true},
-		{"some/path", true},
+		{"some/path", false},
+		{"github.com/org/repo", false},
 		{"file:///abs/path", true},
 		{"file::/abs/path", true},
 		{"git::https://github.com/x/y.git", false},
@@ -193,6 +194,21 @@ func TestListSubmodules_Source(t *testing.T) {
 	subs, err := s.ListSubmodules(context.Background(), Request{Source: "./testdata/basic"})
 	require.NoError(t, err)
 	assert.Contains(t, subs, "modules/network")
+}
+
+// TestListSubmodules_Source_VersionConstraintRejected: ListSubmodules
+// must enforce the same Source + constraint invariant as GetModule.
+func TestListSubmodules_Source_VersionConstraintRejected(t *testing.T) {
+	t.Parallel()
+	s := NewServer(nil, WithCacheDir(t.TempDir()))
+	defer s.Cleanup()
+
+	_, err := s.ListSubmodules(context.Background(), Request{
+		Source:  "./testdata/basic",
+		Version: "~> 1.0",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSourceWithConstraint)
 }
 
 // TestGetSubmodule_Source: submodule inspection via Source.
