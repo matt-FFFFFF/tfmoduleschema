@@ -166,7 +166,7 @@ func (s *Server) getModuleFromSource(ctx context.Context, req Request, subpath s
 
 	key := moduleKey{
 		registry: "source",
-		ns:       req.Source,
+		source:   req.Source,
 		subpath:  subpath,
 	}
 

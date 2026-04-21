@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	goversion "github.com/hashicorp/go-version"
 	cli "github.com/urfave/cli/v3"
 
 	"github.com/matt-FFFFFF/tfmoduleschema"
@@ -161,6 +162,7 @@ func validateRequestFlags(cmd *cli.Command) error {
 	sys := strings.TrimSpace(cmd.String("system"))
 	regURL := strings.TrimSpace(cmd.String("registry-url"))
 	regTok := strings.TrimSpace(cmd.String("registry-token"))
+	version := strings.TrimSpace(cmd.String("version-constraint"))
 
 	if source != "" {
 		if ns != "" || name != "" || sys != "" {
@@ -168,6 +170,16 @@ func validateRequestFlags(cmd *cli.Command) error {
 		}
 		if regURL != "" || regTok != "" {
 			return fmt.Errorf("--source is mutually exclusive with --registry-url/--registry-token")
+		}
+		// Source mode has no registry to resolve a constraint
+		// against, so --version-constraint must either be empty or
+		// a concrete version (e.g. "1.2.3"), not a range like ">=
+		// 1.0". Catching this here turns a confusing server-side
+		// error into an immediate CLI validation failure.
+		if version != "" {
+			if _, err := goversion.NewVersion(version); err != nil {
+				return fmt.Errorf("--source requires --version-constraint to be empty or a concrete version (got %q)", version)
+			}
 		}
 		return nil
 	}

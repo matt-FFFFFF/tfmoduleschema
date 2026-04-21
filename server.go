@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sync"
 
 	"github.com/matt-FFFFFF/tfmoduleschema/registry"
@@ -42,13 +43,17 @@ type Server struct {
 // moduleKey is the canonical cache key for an in-memory Module entry.
 // Submodule path is included so root and submodule results are distinct.
 // host is only populated for RegistryTypeCustom entries and keeps
-// entries from distinct custom registries separate.
+// entries from distinct custom registries separate. source is only
+// populated for Source-mode entries (where Request.Source was set),
+// and is the raw go-getter source string; the ns/name/system/version
+// fields are then unused.
 type moduleKey struct {
 	registry RegistryType
 	host     string
 	ns, name string
 	system   string
 	version  string
+	source   string
 	subpath  string
 }
 
@@ -213,11 +218,22 @@ func (s *Server) registryHostFor(t RegistryType) (string, error) {
 	}
 	type hoster interface{ Host() string }
 	if h, ok := r.(hoster); ok {
-		return h.Host(), nil
+		if host := h.Host(); host != "" {
+			return host, nil
+		}
 	}
-	// An injected custom registry that doesn't expose Host() — fall
-	// back to a stable placeholder so the cache path is still
-	// deterministic.
+	// Host() was absent or empty — derive the host from BaseURL()
+	// (which every Registry must expose). This keeps cache entries
+	// from distinct injected custom registries isolated even when
+	// they don't implement Host().
+	if base := r.BaseURL(); base != "" {
+		if u, err := url.Parse(base); err == nil && u.Host != "" {
+			return u.Host, nil
+		}
+	}
+	// Last-resort placeholder. Two distinct registries with no
+	// resolvable host and no BaseURL will collide, but at that point
+	// the cache entries are not meaningfully distinguishable anyway.
 	return "custom", nil
 }
 
