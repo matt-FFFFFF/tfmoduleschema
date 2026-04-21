@@ -2,8 +2,10 @@ package tfmoduleschema
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -45,8 +47,10 @@ var windowsDriveRE = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
 //     "mydir/mymodule"): remote, matching Terraform's module-source
 //     conventions where undecorated paths are registry addresses.
 //
-// The actual path normalisation for local sources is delegated to
-// go-getter's FileDetector via localSourcePath.
+// The actual path normalisation for local sources is performed by
+// localSourcePath, which strips any "file::" / "file://" prefix (with
+// proper URL decoding for the latter) and resolves the result with
+// filepath.Abs.
 func isLocalSource(src string) bool {
 	if src == "" {
 		return false
@@ -86,16 +90,47 @@ func isLocalSource(src string) bool {
 // extra translation go-getter's FileDetector performs (such as
 // forward-slashing paths on Windows for URL use) is inappropriate
 // for paths we then hand to os.Stat / hclparse.
+//
+// Supported input forms:
+//
+//   - "file::<path>"  — forced-getter prefix; the remainder is a
+//     plain filesystem path.
+//   - "file://<path>" — RFC 8089 file URI. Parsed with net/url so
+//     that percent-encoding, an optional "localhost" host, and
+//     Windows drive-letter URIs ("file:///C:/foo") are handled
+//     correctly.
+//   - anything else  — taken as-is.
 func localSourcePath(src string) (string, error) {
-	// Strip any "file::" or "file://" prefix so we're left with a
-	// plain filesystem path.
 	s := src
+
+	// Forced-getter "file::" prefix: treat the remainder as a plain
+	// filesystem path, no URL decoding.
 	if m := forcedGetterRE.FindStringSubmatch(s); m != nil && strings.EqualFold(m[1], "file") {
 		s = m[2]
+	} else if strings.HasPrefix(strings.ToLower(s), "file://") {
+		// file:// URI: parse with net/url so we handle
+		// percent-encoding, an optional "localhost" host, and
+		// Windows drive-letter URIs ("file:///C:/foo") correctly.
+		u, err := url.Parse(s)
+		if err != nil {
+			return "", fmt.Errorf("parsing file URI %q: %w", src, err)
+		}
+		// Only "" and "localhost" are valid hosts in a file URI;
+		// anything else (e.g. a UNC-style "file://server/share")
+		// cannot be meaningfully resolved as a local path here.
+		if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+			return "", fmt.Errorf("file URI %q has non-local host %q", src, u.Host)
+		}
+		p := u.Path
+		// On Windows, file URIs for drive paths look like
+		// "file:///C:/foo" → Path "/C:/foo"; strip the leading
+		// slash so filepath.Abs sees a real drive-letter path.
+		if runtime.GOOS == "windows" && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+			p = p[1:]
+		}
+		s = filepath.FromSlash(p)
 	}
-	if strings.HasPrefix(strings.ToLower(s), "file://") {
-		s = s[len("file://"):]
-	}
+
 	if s == "" {
 		return "", fmt.Errorf("empty local source path")
 	}

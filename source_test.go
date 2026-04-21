@@ -62,6 +62,21 @@ func TestLocalSourcePath(t *testing.T) {
 	got, err = localSourcePath("file::/tmp/foo")
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/foo", got)
+
+	// file:// with explicit "localhost" host — RFC 8089 allows this
+	// and it must resolve to the same path as the host-less form.
+	got, err = localSourcePath("file://localhost/tmp/foo")
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/foo", got)
+
+	// Percent-encoded segments must be decoded.
+	got, err = localSourcePath("file:///tmp/has%20space/foo")
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/has space/foo", got)
+
+	// Non-local host in a file URI is not resolvable here.
+	_, err = localSourcePath("file://someserver/share/foo")
+	require.Error(t, err)
 }
 
 // TestGetModule_Source_Local exercises the Source field pointing at a
