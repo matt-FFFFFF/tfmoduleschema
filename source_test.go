@@ -88,9 +88,15 @@ func TestGetModule_Source_Local(t *testing.T) {
 	assert.Contains(t, names, "name")
 	assert.Contains(t, names, "location")
 
-	// Local sources must not populate the on-disk cache.
-	entries, _ := os.ReadDir(filepath.Join(cacheDir, "source"))
-	assert.Empty(t, entries, "local sources must not create cache entries")
+	// Local sources must not populate the on-disk cache. A missing
+	// directory is the happy path (nothing was written); any other
+	// read error is a real failure we want to surface.
+	entries, err := os.ReadDir(filepath.Join(cacheDir, "source"))
+	if err != nil {
+		require.True(t, os.IsNotExist(err), "unexpected ReadDir error: %v", err)
+	} else {
+		assert.Empty(t, entries, "local sources must not create cache entries")
+	}
 }
 
 // TestGetModule_Source_Relative exercises a relative path Source.
