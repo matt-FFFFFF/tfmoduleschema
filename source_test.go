@@ -177,7 +177,9 @@ func TestGetModule_Source_VersionConstraintRejected(t *testing.T) {
 }
 
 // TestGetModule_Source_ConcreteVersionAllowed: concrete versions are OK
-// because they're only used for cache keying (and ignored here).
+// with Source requests; unlike version constraints, they are accepted
+// but do not affect Source resolution or caching (Source-mode caches
+// are keyed only by Source and subpath).
 func TestGetModule_Source_ConcreteVersionAllowed(t *testing.T) {
 	t.Parallel()
 	s := NewServer(nil, WithCacheDir(t.TempDir()))

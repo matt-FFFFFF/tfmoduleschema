@@ -145,22 +145,29 @@ func registryTypeFromString(s string) tfmoduleschema.RegistryType {
 // before dispatching a Request or a VersionsRequest.
 //
 // Rules:
-//   - --source is mutually exclusive with --namespace, --name, --system.
+//   - --source is mutually exclusive with --namespace, --name, --system,
+//     --registry-url, and --registry-token.
 //   - When --source is not set, all three of --namespace/--name/--system
 //     are required (mirroring the old Required:true behaviour, now
 //     enforced in code so --source can opt out).
 //   - When --registry=custom is selected (explicitly or via
 //     --registry-url), --registry-url must be supplied unless --source
-//     is set.
+//     is set, and its value must be a syntactically valid
+//     custom-registry input so that WithCustomRegistry does not panic.
 func validateRequestFlags(cmd *cli.Command) error {
 	source := strings.TrimSpace(cmd.String("source"))
 	ns := strings.TrimSpace(cmd.String("namespace"))
 	name := strings.TrimSpace(cmd.String("name"))
 	sys := strings.TrimSpace(cmd.String("system"))
+	regURL := strings.TrimSpace(cmd.String("registry-url"))
+	regTok := strings.TrimSpace(cmd.String("registry-token"))
 
 	if source != "" {
 		if ns != "" || name != "" || sys != "" {
 			return fmt.Errorf("--source is mutually exclusive with --namespace/--name/--system")
+		}
+		if regURL != "" || regTok != "" {
+			return fmt.Errorf("--source is mutually exclusive with --registry-url/--registry-token")
 		}
 		return nil
 	}
@@ -182,9 +189,18 @@ func validateRequestFlags(cmd *cli.Command) error {
 	// catches `--registry custom` without `--registry-url`, which
 	// would otherwise fail much later with "no custom registry
 	// configured" from the server.
-	if registryTypeFromCmd(cmd) == tfmoduleschema.RegistryTypeCustom &&
-		strings.TrimSpace(cmd.String("registry-url")) == "" {
+	if registryTypeFromCmd(cmd) == tfmoduleschema.RegistryTypeCustom && regURL == "" {
 		return fmt.Errorf("--registry=custom requires --registry-url")
+	}
+	// Pre-validate --registry-url shape so newServer's call to
+	// WithCustomRegistry (which panics on malformed input) never
+	// trips on user-supplied strings. Callers reach newServer through
+	// multiple dispatch paths; catching the error here keeps CLI
+	// failures as normal non-zero-exit messages.
+	if regURL != "" {
+		if _, _, err := registry.DiscoverModulesEndpointInputCheck(regURL); err != nil {
+			return fmt.Errorf("invalid --registry-url %q: %w", regURL, err)
+		}
 	}
 	return nil
 }
@@ -244,7 +260,7 @@ func loadModule(ctx context.Context, s *tfmoduleschema.Server, cmd *cli.Command)
 	return s.GetSubmodule(ctx, requestFromCmd(cmd), sub)
 }
 
-func newServer(cmd *cli.Command) *tfmoduleschema.Server {
+func newServer(cmd *cli.Command) (*tfmoduleschema.Server, error) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	opts := []tfmoduleschema.ServerOption{
@@ -252,6 +268,14 @@ func newServer(cmd *cli.Command) *tfmoduleschema.Server {
 		tfmoduleschema.WithForceFetch(cmd.Bool("force-fetch")),
 	}
 	if url := strings.TrimSpace(cmd.String("registry-url")); url != "" {
+		// Pre-validate so WithCustomRegistry (which panics on
+		// malformed input) can't crash the CLI from user input. The
+		// same check is also performed in validateRequestFlags for
+		// early error reporting, but newServer is reached through
+		// multiple paths; this is the final backstop.
+		if _, _, err := registry.DiscoverModulesEndpointInputCheck(url); err != nil {
+			return nil, fmt.Errorf("invalid --registry-url %q: %w", url, err)
+		}
 		var regOpts []registry.Option
 		if tok := strings.TrimSpace(cmd.String("registry-token")); tok != "" {
 			regOpts = append(regOpts, registry.WithBearerToken(tok))
@@ -268,7 +292,7 @@ func newServer(cmd *cli.Command) *tfmoduleschema.Server {
 			}
 		}))
 	}
-	return tfmoduleschema.NewServer(logger, opts...)
+	return tfmoduleschema.NewServer(logger, opts...), nil
 }
 
 // cacheLabel produces a human label for a Request, preferring Source
@@ -302,7 +326,10 @@ func moduleCommand() *cli.Command {
 			Name:  "schema",
 			Usage: "Print the full parsed module as JSON",
 			Action: func(ctx context.Context, cmd *cli.Command) error {
-				s := newServer(cmd)
+				s, err := newServer(cmd)
+				if err != nil {
+					return err
+				}
 				defer s.Cleanup()
 				m, err := loadModule(ctx, s, cmd)
 				if err != nil {
@@ -325,7 +352,10 @@ func variableCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List variable names",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -344,7 +374,10 @@ func variableCommand() *cli.Command {
 				Usage:     "Print full schema for one variable, or all when no name given",
 				ArgsUsage: "[variable-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -377,7 +410,10 @@ func outputCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List output names",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -396,7 +432,10 @@ func outputCommand() *cli.Command {
 				Usage:     "Print full schema for one output, or all when no name given",
 				ArgsUsage: "[output-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -429,7 +468,10 @@ func providerCommand() *cli.Command {
 				Name:  "list",
 				Usage: "List required provider names",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -449,7 +491,10 @@ func providerCommand() *cli.Command {
 				Usage:     "Print requirement for one provider, or the full map when no name given",
 				ArgsUsage: "[provider-name]",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					s := newServer(cmd)
+					s, err := newServer(cmd)
+					if err != nil {
+						return err
+					}
 					defer s.Cleanup()
 					m, err := loadModule(ctx, s, cmd)
 					if err != nil {
@@ -484,7 +529,10 @@ func submoduleCommand() *cli.Command {
 				if err := validateRequestFlags(cmd); err != nil {
 					return err
 				}
-				s := newServer(cmd)
+				s, err := newServer(cmd)
+				if err != nil {
+					return err
+				}
 				defer s.Cleanup()
 				subs, err := s.ListSubmodules(ctx, requestFromCmd(cmd))
 				if err != nil {
@@ -514,7 +562,10 @@ func versionCommand() *cli.Command {
 				if err := validateRequestFlags(cmd); err != nil {
 					return err
 				}
-				s := newServer(cmd)
+				s, err := newServer(cmd)
+				if err != nil {
+					return err
+				}
 				defer s.Cleanup()
 				vs, err := s.GetAvailableVersions(ctx, versionsRequestFromCmd(cmd))
 				if err != nil {
