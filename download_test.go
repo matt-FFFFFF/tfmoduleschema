@@ -57,17 +57,77 @@ func TestDownloader_Fetch_HTTPArchive(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestDownloader_Fetch_Idempotent: a second call when dest already exists
-// should be a no-op.
-func TestDownloader_Fetch_Idempotent(t *testing.T) {
+// TestDownloader_Fetch_ReplacesExistingDest: when dest already exists,
+// Fetch must replace its contents with a fresh copy (it is not
+// idempotent by itself — the Server's cache-hit check provides
+// idempotency). This is the regression test for issue #6 at the
+// downloader layer.
+func TestDownloader_Fetch_ReplacesExistingDest(t *testing.T) {
 	t.Parallel()
-	dest := t.TempDir()
-	// pre-seed
-	require.NoError(t, os.WriteFile(filepath.Join(dest, "x"), []byte("y"), 0o644))
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "main.tf"), []byte(`variable "fresh" {}`), 0o644))
+
+	dest := filepath.Join(t.TempDir(), "out")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
+	// Pre-seed with a stale file that must be removed by Fetch.
+	require.NoError(t, os.WriteFile(filepath.Join(dest, "stale.tf"), []byte("stale"), 0o644))
 
 	d := &downloader{}
-	require.NoError(t, d.Fetch(context.Background(), "/nonexistent/path/should/not/be/used", dest))
-	// File should still be there.
-	_, err := os.Stat(filepath.Join(dest, "x"))
+	require.NoError(t, d.Fetch(context.Background(), src, dest))
+
+	// Fresh file should be present.
+	_, err := os.Stat(filepath.Join(dest, "main.tf"))
 	assert.NoError(t, err)
+	// Stale file must be gone.
+	_, err = os.Stat(filepath.Join(dest, "stale.tf"))
+	assert.True(t, os.IsNotExist(err), "stale file should have been removed, got %v", err)
+}
+
+// TestDownloader_Fetch_PreservesDestOnFailure: if the download itself
+// fails, the existing dest must be preserved — a transient fetch error
+// must not destroy the last known-good cache entry.
+func TestDownloader_Fetch_PreservesDestOnFailure(t *testing.T) {
+	t.Parallel()
+	dest := filepath.Join(t.TempDir(), "out")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dest, "known-good.tf"), []byte(`variable "k" {}`), 0o644))
+
+	d := &downloader{}
+	// Non-existent local path — go-getter will fail.
+	err := d.Fetch(context.Background(), "/definitely/does/not/exist/tfmoduleschema-test", dest)
+	require.Error(t, err)
+
+	// Known-good file must still be there.
+	_, statErr := os.Stat(filepath.Join(dest, "known-good.tf"))
+	assert.NoError(t, statErr, "existing cache entry should survive a failed fetch")
+	// No stale partial or backup should leak.
+	_, statErr = os.Stat(dest + ".partial")
+	assert.True(t, os.IsNotExist(statErr), "partial should be cleaned up on failure, got %v", statErr)
+	_, statErr = os.Stat(dest + ".backup")
+	assert.True(t, os.IsNotExist(statErr), "backup should be cleaned up on failure, got %v", statErr)
+}
+
+// TestDownloader_Fetch_RecoversOrphanedBackup: if a previous call
+// crashed after moving dest → <dest>.backup but before renaming the
+// partial into place, a subsequent Fetch call must restore the backup
+// rather than blindly deleting it. When the upstream fetch then fails,
+// the caller's last known-good cache entry must still be intact.
+func TestDownloader_Fetch_RecoversOrphanedBackup(t *testing.T) {
+	t.Parallel()
+	dest := filepath.Join(t.TempDir(), "out")
+	backup := dest + ".backup"
+	// Simulate a prior interrupted run: dest missing, backup present.
+	require.NoError(t, os.MkdirAll(backup, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(backup, "recovered.tf"), []byte(`variable "r" {}`), 0o644))
+
+	d := &downloader{}
+	// Force the download to fail so we can observe the recovered state.
+	err := d.Fetch(context.Background(), "/definitely/does/not/exist/tfmoduleschema-test", dest)
+	require.Error(t, err)
+
+	// Backup should have been promoted to dest before the (failing) download.
+	_, statErr := os.Stat(filepath.Join(dest, "recovered.tf"))
+	assert.NoError(t, statErr, "orphaned backup should have been restored to dest")
+	_, statErr = os.Stat(backup)
+	assert.True(t, os.IsNotExist(statErr), "backup should no longer exist after recovery, got %v", statErr)
 }
