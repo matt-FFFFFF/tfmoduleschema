@@ -103,4 +103,6 @@ func TestDownloader_Fetch_PreservesDestOnFailure(t *testing.T) {
 	// No stale partial or backup should leak.
 	_, statErr = os.Stat(dest + ".partial")
 	assert.True(t, os.IsNotExist(statErr), "partial should be cleaned up on failure, got %v", statErr)
+	_, statErr = os.Stat(dest + ".backup")
+	assert.True(t, os.IsNotExist(statErr), "backup should be cleaned up on failure, got %v", statErr)
 }

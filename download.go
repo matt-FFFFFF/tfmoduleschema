@@ -68,6 +68,12 @@ func (d *downloader) Fetch(ctx context.Context, src, dest string) error {
 			return fmt.Errorf("backing up existing cache entry %q: %w", dest, err)
 		}
 		haveBackup = true
+	} else if !os.IsNotExist(err) {
+		// Lstat failed for a reason other than "not there" (e.g.
+		// permissions, IO). Bail rather than silently skipping the
+		// backup and risking a confusing rename error below.
+		_ = os.RemoveAll(partial)
+		return fmt.Errorf("inspecting existing cache entry %q: %w", dest, err)
 	}
 
 	if err := os.Rename(partial, dest); err != nil {
