@@ -97,6 +97,7 @@ type Variable struct {
 	Default     any       `json:"default,omitempty"`
 	Required    bool      `json:"required"`
 	Sensitive   bool      `json:"sensitive,omitempty"`
+	Ephemeral   bool      `json:"ephemeral,omitempty"`
 	Pos         SourcePos `json:"pos"`
 }
 

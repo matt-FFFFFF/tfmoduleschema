@@ -22,11 +22,14 @@ func inspectDir(dir, subpath string) (*Module, error) {
 		// LoadModule always returns a non-nil module, but be defensive.
 		m = tfconfig.NewModule(dir)
 	}
-	return mapModule(m, subpath, diags), nil
+	eph := ephemeralVariables(dir)
+	return mapModule(m, subpath, diags, eph), nil
 }
 
 // mapModule converts a tfconfig.Module into our Module type.
-func mapModule(m *tfconfig.Module, subpath string, diags tfconfig.Diagnostics) *Module {
+// ephemeral is a name-set of variables declared with `ephemeral = true`,
+// since terraform-config-inspect does not surface that attribute.
+func mapModule(m *tfconfig.Module, subpath string, diags tfconfig.Diagnostics, ephemeral map[string]bool) *Module {
 	out := &Module{
 		Path:              subpath,
 		RequiredCore:      append([]string(nil), m.RequiredCore...),
@@ -49,6 +52,7 @@ func mapModule(m *tfconfig.Module, subpath string, diags tfconfig.Diagnostics) *
 			Default:     v.Default,
 			Required:    v.Required,
 			Sensitive:   v.Sensitive,
+			Ephemeral:   ephemeral[v.Name],
 			Pos:         SourcePos{Filename: v.Pos.Filename, Line: v.Pos.Line},
 		})
 	}

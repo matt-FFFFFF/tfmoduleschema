@@ -35,6 +35,13 @@ variable "secret" {
   sensitive   = true
 }
 
+variable "session_token" {
+  description = "Short-lived token; never persisted to state."
+  type        = string
+  ephemeral   = true
+  sensitive   = true
+}
+
 resource "azurerm_resource_group" "rg" {
   name     = var.name
   location = var.location

@@ -65,7 +65,7 @@ func TestServer_GetModule_EndToEnd(t *testing.T) {
 	req := Request{Namespace: "Azure", Name: "example", System: "azurerm"}
 	m, err := s.GetModule(context.Background(), req)
 	require.NoError(t, err)
-	require.Len(t, m.Variables, 4)
+	require.Len(t, m.Variables, 5)
 	require.Contains(t, m.RequiredProviders, "azurerm")
 	require.Contains(t, m.ModuleCalls, "network")
 }
@@ -79,7 +79,7 @@ func TestServer_VersionResolution(t *testing.T) {
 		Namespace: "n", Name: "m", System: "s", Version: "~> 1.0",
 	})
 	require.NoError(t, err)
-	assert.Len(t, vars, 4)
+	assert.Len(t, vars, 5)
 }
 
 func TestServer_ListAndGetSubmodule(t *testing.T) {

@@ -14,10 +14,16 @@ func TestInspectDir_Basic(t *testing.T) {
 	require.NoError(t, err)
 
 	// Variables (sorted by name).
-	require.Len(t, m.Variables, 4)
-	names := []string{m.Variables[0].Name, m.Variables[1].Name, m.Variables[2].Name, m.Variables[3].Name}
-	assert.Equal(t, []string{"location", "name", "secret", "tags"}, names)
+	require.Len(t, m.Variables, 5)
+	names := make([]string, len(m.Variables))
+	for i, v := range m.Variables {
+		names[i] = v.Name
+	}
+	assert.Equal(t, []string{"location", "name", "secret", "session_token", "tags"}, names)
 	assert.True(t, m.Variables[2].Sensitive, "secret should be sensitive")
+	assert.False(t, m.Variables[2].Ephemeral, "secret is not ephemeral")
+	assert.True(t, m.Variables[3].Ephemeral, "session_token should be ephemeral")
+	assert.True(t, m.Variables[3].Sensitive, "session_token is also sensitive")
 	assert.True(t, m.Variables[1].Required, "name should be required")
 	assert.False(t, m.Variables[0].Required, "location has a default")
 	assert.Equal(t, "westeurope", m.Variables[0].Default)
