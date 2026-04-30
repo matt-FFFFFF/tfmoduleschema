@@ -14,9 +14,9 @@ import (
 // the set of variable names declared with `ephemeral = true`.
 //
 // terraform-config-inspect does not surface the `ephemeral` attribute on
-// standard `variable` blocks, so we parse it ourselves. Only literal boolean
-// values are honoured; dynamic expressions are ignored (they are vanishingly
-// rare in variable blocks).
+// standard `variable` blocks, so we parse it ourselves. Constant boolean
+// expressions are honoured; dynamic or non-constant expressions are ignored
+// (they are vanishingly rare in variable blocks).
 func ephemeralVariables(dir string) map[string]bool {
 	out := map[string]bool{}
 	entries, err := os.ReadDir(dir)
